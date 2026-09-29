@@ -14,6 +14,9 @@ npm install @flatten-js/spatial-graph @flatten-js/core
 `@flatten-js/core` is a peer dependency, so your app and this library share one
 copy of `Point` and `Segment`.
 
+The package ships both ES modules and CommonJS, with TypeScript declarations for
+each. It requires Node.js 20 or later.
+
 ## Usage
 
 ```ts
@@ -55,18 +58,28 @@ building node keys.
 pnpm install
 pnpm typecheck
 pnpm test
-pnpm build      # tsc -> dist/
+pnpm build           # tsdown -> dist/ (ESM + CJS + .d.ts)
+pnpm check:package   # publint + are-the-types-wrong
 ```
 
 Sources are ESM with `.js` extensions on relative imports (`nodenext`).
 
-## Publishing
+## Releasing
 
-```sh
-npm login
-npm pack --dry-run   # inspect the tarball first
-npm publish          # runs typecheck, tests and build first (prepublishOnly)
-```
+Releases are published from GitHub Actions with
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC, no
+npm token), and npm generates provenance automatically.
+
+1. Bump `version` in `package.json` and merge to `main`.
+2. Tag the release and push the tag. The tag must match the version:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. The `release` workflow (`.github/workflows/publish.yml`) checks the tag,
+   runs typecheck, tests, build and package checks, then runs `npm publish`.
 
 ## License
 

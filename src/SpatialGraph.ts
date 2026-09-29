@@ -1,4 +1,5 @@
 import graphology from 'graphology';
+import type { GraphConstructor } from 'graphology-types';
 import { bidirectional } from 'graphology-shortest-path';
 import { Segment, Point, Multiline } from '@flatten-js/core';
 import type {
@@ -30,15 +31,16 @@ import {
 } from './constants.js';
 
 // graphology is CommonJS (`module.exports = Graph`) but ships ESM-style typings,
-// so under `nodenext` the default import is typed as the module namespace.
-// At runtime the default import is the Graph class itself.
-const Graph = graphology as unknown as typeof graphology.default;
+// so its default import is typed differently from ESM and CJS consumers.
+// At runtime it is the Graph class in both; graphology-types' GraphConstructor
+// gives it one type regardless of module format.
+const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttributes>;
 
 /**
  * SpatialGraph represents a 2D planar graph with geometric operations
  * It extends graphology's Graph class and provides spatial query methods
  */
-export class SpatialGraph extends Graph<NodeAttributes, EdgeAttributes> {
+export class SpatialGraph extends Graph {
   constructor(options?: SpatialGraphOptions) {
     super({ type: 'undirected', multi: false });
 

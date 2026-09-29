@@ -21,12 +21,19 @@
   },
   "homepage": "https://github.com/alexbol99/spatial-graph#readme",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
@@ -43,10 +50,11 @@
     "access": "public"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "check:package": "publint --strict && attw --pack .",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
   },
   "peerDependencies": {
     "@flatten-js/core": "^1.6.12"
@@ -57,8 +65,11 @@
     "graphology-types": "^0.24.8"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
     "@flatten-js/core": "^1.6.12",
     "@types/node": "^24.0.0",
+    "publint": "^0.3.24",
+    "tsdown": "^0.23.0",
     "typescript": "~5.9.3",
     "vitest": "^4.0.18"
   },
