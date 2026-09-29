@@ -828,28 +828,6 @@ export class SpatialGraph extends Graph {
     return nodesToMove;
   }
 
-  findLineIntersection(edge1: NxEdge, edge2: NxEdge, checkPointOnEdge = false): NxPoint | null {
-    const [a, b] = edge1;
-    const [c, d] = edge2;
-
-    const denominator = (a[0] - b[0]) * (c[1] - d[1]) - (a[1] - b[1]) * (c[0] - d[0]);
-    if (Math.abs(denominator) < 1e-9) return null;
-
-    const aCross = a[0] * b[1] - a[1] * b[0];
-    const cCross = c[0] * d[1] - c[1] * d[0];
-    const x = (aCross * (c[0] - d[0]) - (a[0] - b[0]) * cCross) / denominator;
-    const y = (aCross * (c[1] - d[1]) - (a[1] - b[1]) * cCross) / denominator;
-    const intersection: NxPoint = [x, y];
-
-    if (checkPointOnEdge) {
-      const onFirst = toFlattenSegment(edge1).distanceTo(toFlattenPoint(intersection))[0] < 1e-6;
-      const onSecond = toFlattenSegment(edge2).distanceTo(toFlattenPoint(intersection))[0] < 1e-6;
-      if (!onFirst || !onSecond) return null;
-    }
-
-    return intersection;
-  }
-
   findIsolatedPaths(nodesSubset?: NxPoint[]): NxPoint[][] {
     const allowedKeys = nodesSubset ? new Set(nodesSubset.map((node) => this.nodeKey(node))) : null;
     const allowed = (key: string) => !allowedKeys || allowedKeys.has(key);

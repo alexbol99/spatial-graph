@@ -1,4 +1,4 @@
-import { Point, type Segment } from '@flatten-js/core';
+import { Line, Point, type Segment } from '@flatten-js/core';
 import type { NxPoint, NxEdge } from '../types.js';
 import { toFlattenSegment, fromFlattenPoint, toFlattenPoint } from './geometry.js';
 
@@ -39,6 +39,39 @@ export function findIntersection(e1: NxEdge, e2: NxEdge, checkPointOnEdge = true
   }
 
   return fromFlattenPoint(intersection);
+}
+
+/**
+ * Find the intersection point of the infinite lines through two edges
+ * @param e1 First edge
+ * @param e2 Second edge
+ * @param checkPointOnEdge If true, the point must also lie on both edges
+ * @returns Exact (not grid-snapped) intersection point, or null for parallel,
+ *   coincident or zero-length edges
+ */
+export function findLineIntersection(
+  e1: NxEdge,
+  e2: NxEdge,
+  checkPointOnEdge = false,
+): NxPoint | null {
+  const seg1 = toFlattenSegment(e1);
+  const seg2 = toFlattenSegment(e2);
+
+  // A zero-length edge defines no line (flatten-js Line throws for it)
+  if (seg1.start.equalTo(seg1.end) || seg2.start.equalTo(seg2.end)) {
+    return null;
+  }
+
+  const [point] = new Line(seg1.start, seg1.end).intersect(new Line(seg2.start, seg2.end));
+  if (!point) {
+    return null;
+  }
+
+  if (checkPointOnEdge && !(seg1.contains(point) && seg2.contains(point))) {
+    return null;
+  }
+
+  return [point.x, point.y];
 }
 
 /**
