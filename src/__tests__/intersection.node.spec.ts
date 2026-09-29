@@ -1,6 +1,6 @@
 import { Point, Segment } from '@flatten-js/core';
 import { describe, expect, it } from 'vitest';
-import { findIntersection, isPointOnSegment } from '../utils/intersection.js';
+import { findIntersection, findLineIntersection, isPointOnSegment } from '../utils/intersection.js';
 
 describe('intersection utilities', () => {
   describe('findIntersection', () => {
@@ -47,6 +47,80 @@ describe('intersection utilities', () => {
             [15, 0],
           ],
         ),
+      ).toBeNull();
+    });
+  });
+
+  describe('findLineIntersection', () => {
+    it('intersects the lines through the edges, beyond their ends', () => {
+      expect(
+        findLineIntersection(
+          [
+            [0, 0],
+            [1, 0],
+          ],
+          [
+            [5, 1],
+            [5, 2],
+          ],
+        ),
+      ).toEqual([5, 0]);
+    });
+
+    it('returns the exact point without snapping to the grid', () => {
+      expect(
+        findLineIntersection(
+          [
+            [0, 0],
+            [1, 1],
+          ],
+          [
+            [0, 1],
+            [1, 0],
+          ],
+        ),
+      ).toEqual([0.5, 0.5]);
+    });
+
+    it('returns null when checkPointOnEdge is set and the point is off an edge', () => {
+      expect(
+        findLineIntersection(
+          [
+            [0, 0],
+            [1, 0],
+          ],
+          [
+            [5, 1],
+            [5, 2],
+          ],
+          true,
+        ),
+      ).toBeNull();
+    });
+
+    it('returns null for parallel, coincident and zero-length edges', () => {
+      const edge: [[number, number], [number, number]] = [
+        [0, 0],
+        [10, 0],
+      ];
+
+      expect(
+        findLineIntersection(edge, [
+          [0, 5],
+          [10, 5],
+        ]),
+      ).toBeNull();
+      expect(
+        findLineIntersection(edge, [
+          [2, 0],
+          [4, 0],
+        ]),
+      ).toBeNull();
+      expect(
+        findLineIntersection(edge, [
+          [3, 3],
+          [3, 3],
+        ]),
       ).toBeNull();
     });
   });

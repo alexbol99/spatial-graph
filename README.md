@@ -54,7 +54,8 @@ The graph lives on a coordinate grid: points are rounded to
 round to the same key are the same node. Helpers that return points
 (`fromFlattenPoint`, `findIntersection`, `projectPointOnSegment`, ...) snap
 their results to the same grid; checks such as `isPointOnSegment` and the
-validation inside `findIntersection` use exact coordinates.
+validation inside `findIntersection` use exact coordinates. `findLineIntersection`
+returns the exact intersection of the lines through two edges.
 
 ## Development
 
