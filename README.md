@@ -49,8 +49,12 @@ Geometry helpers (`pointsEqual`, `getPointDistance`, `findIntersection`,
 `nearestPointOnSegment`, `projectPointOnSegment`, ...) and the types (`NxPoint`,
 `NxEdge`, `NodeAttributes`, `EdgeAttributes`, ...) are exported from the package root.
 
-Coordinates are rounded to `COORDINATE_PRECISION` (0 decimals by default) when
-building node keys.
+The graph lives on a coordinate grid: points are rounded to
+`COORDINATE_PRECISION` decimals (0 by default) to build node keys, so points that
+round to the same key are the same node. Helpers that return points
+(`fromFlattenPoint`, `findIntersection`, `projectPointOnSegment`, ...) snap
+their results to the same grid; checks such as `isPointOnSegment` and the
+validation inside `findIntersection` use exact coordinates.
 
 ## Development
 

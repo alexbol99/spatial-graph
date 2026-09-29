@@ -1,6 +1,6 @@
 import graphology from 'graphology';
 import type { GraphConstructor } from 'graphology-types';
-import { bidirectional } from 'graphology-shortest-path';
+import { dijkstra } from 'graphology-shortest-path';
 import { Segment, Point, Multiline } from '@flatten-js/core';
 import type {
   NxPoint,
@@ -90,6 +90,12 @@ export class SpatialGraph extends Graph {
     const startKey = this.nodeKey(start);
     const endKey = this.nodeKey(end);
 
+    // Distinct coordinates can round to the same node key; the edge would be a
+    // zero-length self-loop in graph space.
+    if (startKey === endKey) {
+      return;
+    }
+
     // Ensure nodes exist
     if (!this.hasNode(startKey)) {
       this.addNode(startKey);
@@ -98,12 +104,12 @@ export class SpatialGraph extends Graph {
       this.addNode(endKey);
     }
 
-    // Calculate weight (distance between points)
-    const segment = new Segment(toFlattenPoint(start), toFlattenPoint(end));
+    // Weight is the distance between the nodes as stored, i.e. rounded
+    const segment = new Segment(toFlattenPoint(roundPoint(start)), toFlattenPoint(roundPoint(end)));
     const weight = segment.length;
 
-    // Add edge if it doesn't exist and has valid length
-    if (weight > 0 && !this.hasEdge(startKey, endKey)) {
+    // Add edge if it doesn't exist
+    if (!this.hasEdge(startKey, endKey)) {
       this.addEdge(startKey, endKey, { ...attrs, weight });
     }
   }
@@ -521,8 +527,8 @@ export class SpatialGraph extends Graph {
       return [];
     }
 
-    // Use bidirectional Dijkstra algorithm
-    const path = bidirectional(this, startKey, endKey);
+    // Bidirectional Dijkstra over the edge `weight` (segment length)
+    const path = dijkstra.bidirectional(this, startKey, endKey, 'weight');
 
     if (!path || path.length < 2) {
       return [];
@@ -587,60 +593,69 @@ export class SpatialGraph extends Graph {
    * Updates all connected edges
    */
   moveNode(node: NxPoint, newNode: NxPoint): void {
-    const oldKey = this.nodeKey(node);
-    const newKey = this.nodeKey(newNode);
-
-    if (!this.hasNode(oldKey)) {
-      throw new Error('Node does not exist');
-    }
-
-    if (pointsEqual(node, newNode)) {
-      return; // No movement needed
-    }
-
-    // Get all neighbors and edge attributes
-    const neighbors = this.neighbors(oldKey);
-    const edgeData: Array<{ neighbor: string; attrs: EdgeAttributes }> = [];
-
-    neighbors.forEach((neighbor) => {
-      const edgeKey = this.edge(oldKey, neighbor);
-      if (edgeKey) {
-        edgeData.push({
-          neighbor,
-          attrs: this.getEdgeAttributes(edgeKey),
-        });
-      }
-    });
-
-    // Get node attributes
-    const nodeAttrs = this.getNodeAttributes(oldKey);
-
-    // Remove old node
-    this.dropNode(oldKey);
-
-    // Add new node or merge attrs into an existing collapse target.
-    if (!this.hasNode(newKey)) {
-      this.addNode(newKey, nodeAttrs);
-    } else {
-      const targetAttrs = this.getNodeAttributes(newKey);
-      this.replaceNodeAttributes(newKey, { ...nodeAttrs, ...targetAttrs });
-    }
-
-    // Recreate edges
-    edgeData.forEach(({ neighbor, attrs }) => {
-      const neighborPoint = this.parseNode(neighbor);
-      if (neighborPoint) {
-        this.addEdgeWithAttrs(newNode, neighborPoint, attrs);
-      }
-    });
+    this.moveNodes([[node, newNode]]);
   }
 
   /**
    * Move multiple nodes at once
+   *
+   * All targets are resolved before the graph changes, so the moves apply
+   * simultaneously: in `[[a, b], [b, c]]` node `a` lands on `b`'s old position
+   * while `b` moves on to `c`, instead of `a` first collapsing into `b`.
+   * A node moved onto an existing node is merged into it. Throws before any
+   * change if a source node does not exist.
    */
   moveNodes(nodesToMove: Array<[NxPoint, NxPoint]>): void {
-    nodesToMove.forEach(([oldNode, newNode]) => {
-      this.moveNode(oldNode, newNode);
+    const moves = new Map<string, NxPoint>();
+    for (const [node, newNode] of nodesToMove) {
+      const oldKey = this.nodeKey(node);
+      if (!this.hasNode(oldKey)) {
+        throw new Error('Node does not exist');
+      }
+      if (!pointsEqual(node, newNode)) {
+        moves.set(oldKey, newNode);
+      }
+    }
+
+    if (moves.size === 0) {
+      return; // No movement needed
+    }
+
+    // Snapshot moved nodes and every edge touching them
+    const movedNodes: Array<{ target: NxPoint; attrs: NodeAttributes }> = [];
+    const edgeData: Array<{ source: string; target: string; attrs: EdgeAttributes }> = [];
+    const seenEdges = new Set<string>();
+
+    moves.forEach((target, oldKey) => {
+      movedNodes.push({ target, attrs: this.getNodeAttributes(oldKey) });
+      this.forEachEdge(oldKey, (edgeKey, attrs, source, edgeTarget) => {
+        if (seenEdges.has(edgeKey)) return;
+        seenEdges.add(edgeKey);
+        edgeData.push({ source, target: edgeTarget, attrs });
+      });
+    });
+
+    moves.forEach((_, oldKey) => this.dropNode(oldKey));
+
+    // Add new nodes or merge attrs into an existing collapse target.
+    movedNodes.forEach(({ target, attrs }) => {
+      const newKey = this.nodeKey(target);
+      if (!this.hasNode(newKey)) {
+        this.addNode(newKey, attrs);
+      } else {
+        const targetAttrs = this.getNodeAttributes(newKey);
+        this.replaceNodeAttributes(newKey, { ...attrs, ...targetAttrs });
+      }
+    });
+
+    // Recreate edges between the new endpoint positions
+    const positionOf = (key: string): NxPoint | null => moves.get(key) ?? this.parseNode(key);
+    edgeData.forEach(({ source, target, attrs }) => {
+      const start = positionOf(source);
+      const end = positionOf(target);
+      if (start && end) {
+        this.addEdgeWithAttrs(start, end, attrs);
+      }
     });
   }
 

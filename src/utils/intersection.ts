@@ -1,6 +1,6 @@
 import { Point, type Segment } from '@flatten-js/core';
 import type { NxPoint, NxEdge } from '../types.js';
-import { toFlattenSegment, fromFlattenPoint, toFlattenPoint, pointsEqual } from './geometry.js';
+import { toFlattenSegment, fromFlattenPoint, toFlattenPoint } from './geometry.js';
 
 /**
  * Find the intersection point of two edges
@@ -28,15 +28,17 @@ export function findIntersection(e1: NxEdge, e2: NxEdge, checkPointOnEdge = true
     return null;
   }
 
-  const point = fromFlattenPoint(intersection);
-
+  // Validate the exact intersection; only the returned point is snapped to the
+  // coordinate grid. Validating the rounded point would reject crossings that
+  // do not fall on the grid, e.g. at [0.5, 0.5].
   if (checkPointOnEdge) {
-    if (!isPointOnSegment(point, seg1) || !isPointOnSegment(point, seg2)) {
+    const exact: NxPoint = [intersection.x, intersection.y];
+    if (!isPointOnSegment(exact, seg1) || !isPointOnSegment(exact, seg2)) {
       return null;
     }
   }
 
-  return point;
+  return fromFlattenPoint(intersection);
 }
 
 /**
@@ -48,15 +50,7 @@ export function findIntersection(e1: NxEdge, e2: NxEdge, checkPointOnEdge = true
 export function isPointOnSegment(point: NxPoint, segment: Segment): boolean {
   const p = toFlattenPoint(point);
 
-  // Check if point is an endpoint
-  if (
-    pointsEqual(point, fromFlattenPoint(segment.start)) ||
-    pointsEqual(point, fromFlattenPoint(segment.end))
-  ) {
-    return true;
-  }
-
-  // Check if point is on the segment using distance
+  // Check if point is on the segment using distance (covers endpoints too)
   const distToSegment = segment.distanceTo(p)[0];
 
   // Use a small epsilon for floating point comparison

@@ -26,6 +26,12 @@ export function projectPointToLine(
 export function projectPointOnSegment(point: NxPoint, segment: Segment): NxPoint {
   const p = toFlattenPoint(point);
 
+  // A zero-length segment defines no line (flatten-js throws for it); its
+  // closest point is its endpoint
+  if (segment.start.equalTo(segment.end)) {
+    return fromFlattenPoint(segment.start);
+  }
+
   // Get the projection on the infinite line
   const line = new Line(segment.start, segment.end);
   const projected = p.projectionOn(line);

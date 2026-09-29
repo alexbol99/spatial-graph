@@ -56,6 +56,14 @@ describe('SpatialGraph', () => {
   });
 
   describe('addSegment', () => {
+    it('should skip a segment whose ends round to the same node', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0.1, 0), new Point(0.4, 0)));
+
+      expect(graph.order).toBe(0);
+      expect(graph.size).toBe(0);
+    });
+
     it('should add a segment to the graph', () => {
       const graph = new SpatialGraph();
       const segment = new Segment(new Point(0, 0), new Point(1, 0));
@@ -219,6 +227,63 @@ describe('SpatialGraph', () => {
         targetOnly: true,
         shared: 'target',
       });
+    });
+  });
+
+  describe('moveNode onto a neighbour', () => {
+    it('should drop the edge instead of creating a self-loop', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)));
+
+      graph.moveNode([10, 0], [0.3, 0]);
+
+      expect(graph.order).toBe(1);
+      expect(graph.size).toBe(0);
+      expect(graph.selfLoopCount).toBe(0);
+    });
+  });
+
+  describe('moveNodes', () => {
+    it('should apply all moves simultaneously', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)));
+      graph.addSegment(new Segment(new Point(10, 0), new Point(20, 0)));
+
+      // [0, 0] takes [10, 0]'s old place while [10, 0] moves on to [15, 5]
+      graph.moveNodes([
+        [
+          [0, 0],
+          [10, 0],
+        ],
+        [
+          [10, 0],
+          [15, 5],
+        ],
+      ]);
+
+      expect(graph.getNodes()).toHaveLength(3);
+      expect(graph.getEdgeBetweenPoints([10, 0], [15, 5])).not.toBeNull();
+      expect(graph.getEdgeBetweenPoints([15, 5], [20, 0])).not.toBeNull();
+      expect(graph.size).toBe(2);
+    });
+
+    it('should not change the graph when a source node does not exist', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)));
+
+      expect(() =>
+        graph.moveNodes([
+          [
+            [0, 0],
+            [5, 5],
+          ],
+          [
+            [99, 99],
+            [1, 1],
+          ],
+        ]),
+      ).toThrow('Node does not exist');
+      expect(graph.getEdgeBetweenPoints([0, 0], [10, 0])).not.toBeNull();
     });
   });
 
@@ -519,6 +584,23 @@ describe('SpatialGraph', () => {
       const path = graph.getShortestPath([0, 0], [2, 0]);
 
       expect(path.length).toBe(2);
+    });
+
+    it('should prefer the shorter route over the one with fewer edges', () => {
+      const graph = new SpatialGraph();
+      // Two edges via [0, 100], about 200 long
+      graph.addSegment(new Segment(new Point(0, 0), new Point(0, 100)));
+      graph.addSegment(new Segment(new Point(0, 100), new Point(10, 0)));
+      // Four edges along the x axis, 10 long
+      graph.addSegment(new Segment(new Point(0, 0), new Point(2, 0)));
+      graph.addSegment(new Segment(new Point(2, 0), new Point(5, 0)));
+      graph.addSegment(new Segment(new Point(5, 0), new Point(8, 0)));
+      graph.addSegment(new Segment(new Point(8, 0), new Point(10, 0)));
+
+      const path = graph.getShortestPath([0, 0], [10, 0]);
+
+      expect(path).toHaveLength(4);
+      expect(path.reduce((sum, segment) => sum + segment.length, 0)).toBe(10);
     });
 
     it('should return empty array for disconnected nodes', () => {

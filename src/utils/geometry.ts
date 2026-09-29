@@ -18,7 +18,8 @@ export function toFlattenPoint(point: NxPoint): Point {
 }
 
 /**
- * Convert flatten-js Point to NxPoint
+ * Convert flatten-js Point to NxPoint, snapped to the graph's coordinate grid
+ * (`COORDINATE_PRECISION`)
  */
 export function fromFlattenPoint(point: Point): NxPoint {
   return roundPoint([point.x, point.y]);

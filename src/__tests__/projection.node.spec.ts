@@ -22,5 +22,11 @@ describe('projection utilities', () => {
       expect(projectPointOnSegment([0, 5], segment)).toEqual([0, 0]);
       expect(projectPointOnSegment([10, -5], segment)).toEqual([10, 0]);
     });
+
+    it('should return the endpoint of a zero-length segment', () => {
+      const point = new Segment(new Point(3, 4), new Point(3, 4));
+
+      expect(projectPointOnSegment([7, 1], point)).toEqual([3, 4]);
+    });
   });
 });
