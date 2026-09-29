@@ -209,7 +209,7 @@ describe('SpatialGraph', () => {
     it('should throw error when moving non-existent node', () => {
       const graph = new SpatialGraph();
 
-      expect(() => graph.moveNode([5, 5], [6, 6])).toThrow('Node does not exist');
+      expect(() => graph.moveNode([5, 5], [6, 6])).toThrow(/Node \[5, 5\] does not exist.*addVertex/);
     });
 
     it('should merge node attributes when moving into an existing node', () => {
@@ -282,7 +282,7 @@ describe('SpatialGraph', () => {
             [1, 1],
           ],
         ]),
-      ).toThrow('Node does not exist');
+      ).toThrow(/Node \[99, 99\] does not exist/);
       expect(graph.getEdgeBetweenPoints([0, 0], [10, 0])).not.toBeNull();
     });
   });
@@ -687,6 +687,69 @@ describe('SpatialGraph', () => {
       graph1.union(graph2);
 
       expect(graph1.size).toBe(2);
+    });
+  });
+  describe('serialization', () => {
+    it('should round-trip through graphology export and import', () => {
+      const graph = new SpatialGraph({
+        segments: [
+          new Segment(new Point(0, 0), new Point(10, 0)),
+          new Segment(new Point(10, 0), new Point(10, 10)),
+        ],
+        attrs: [{ id: 'a' }, { id: 'b' }],
+      });
+      graph.setNodeLabel([0, 0], 'start');
+
+      const restored = new SpatialGraph();
+      restored.import(JSON.parse(JSON.stringify(graph.export())));
+
+      expect(restored).toBeInstanceOf(SpatialGraph);
+      expect(restored.getEdges()).toEqual(graph.getEdges());
+      expect(restored.getEdgeAttributesFor([[10, 0], [10, 10]])).toMatchObject({ id: 'b', weight: 10 });
+      expect(restored.getNodeLabel([0, 0])).toBe('start');
+      expect(restored.getShortestPath([0, 0], [10, 10])).toHaveLength(2);
+    });
+  });
+
+  describe('documented edge cases', () => {
+    it('should skip zero-length segments and rounding self-loops', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0, 0), new Point(0, 0)));
+      graph.addSegment(new Segment(new Point(0, 0), new Point(0.2, 0.2)));
+
+      expect(graph.size).toBe(0);
+    });
+
+    it('should return empty values for queries on a missing point', () => {
+      const graph = new SpatialGraph();
+
+      expect(graph.getPointDegree([1, 1])).toBe(0);
+      expect(graph.getPointNeighbors([1, 1])).toEqual([]);
+      expect(graph.getPointAttributes([1, 1])).toEqual({});
+      expect(graph.getShortestPath([1, 1], [2, 2])).toEqual([]);
+    });
+
+    it('should tell the caller how to fix an empty-graph error', () => {
+      const graph = new SpatialGraph();
+
+      expect(() => graph.findNearestEdge([0, 0])).toThrow(/addSegment/);
+      expect(() => graph.getClosestNodeToPoint([0, 0])).toThrow(/addVertex/);
+    });
+
+    it('should return one closed path for a pure cycle', () => {
+      const graph = new SpatialGraph({
+        segments: [
+          new Segment(new Point(0, 0), new Point(10, 0)),
+          new Segment(new Point(10, 0), new Point(10, 10)),
+          new Segment(new Point(10, 10), new Point(0, 0)),
+        ],
+      });
+
+      const paths = graph.findPaths();
+
+      expect(paths).toHaveLength(1);
+      expect(paths[0]).toHaveLength(4);
+      expect(paths[0]![0]).toEqual(paths[0]![3]);
     });
   });
 });

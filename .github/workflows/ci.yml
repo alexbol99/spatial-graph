@@ -47,3 +47,6 @@ jobs:
 
       - name: Check package (publint + attw)
         run: pnpm check:package
+
+      - name: Run examples against the build
+        run: pnpm check:examples

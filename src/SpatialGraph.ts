@@ -37,8 +37,37 @@ import {
 const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttributes>;
 
 /**
- * SpatialGraph represents a 2D planar graph with geometric operations
- * It extends graphology's Graph class and provides spatial query methods
+ * An undirected 2D graph whose nodes are points and whose edges are segments.
+ *
+ * Extends graphology's `Graph`, so every graphology method (`degree`, `neighbors`,
+ * `export`, `import`, ...) is available too. Prefer the point-based methods below
+ * over the raw graphology ones: they take `[x, y]` tuples and handle node keys
+ * for you.
+ *
+ * @remarks
+ * - Nodes are keyed by their coordinates rounded to `COORDINATE_PRECISION`
+ *   decimals (0 by default, i.e. whole numbers). Points that round to the same
+ *   key are the same node.
+ * - The graph is undirected and simple: no parallel edges, no self-loops.
+ *   Zero-length segments, and segments whose endpoints round to the same node,
+ *   are silently skipped.
+ * - Edge attribute `weight` is the segment length and is what path finding uses.
+ * - Query methods on a missing point return an empty value (`[]`, `null`, `{}`,
+ *   `0` or `false`) rather than throwing, unless a method says otherwise.
+ * - To serialize, use graphology: `new SpatialGraph().import(graph.export())`.
+ *   `copy()` and `Graph.from()` return a plain graphology `Graph`, not a
+ *   `SpatialGraph`.
+ *
+ * @example
+ * ```ts
+ * const graph = new SpatialGraph({
+ *   segments: [
+ *     new Segment(new Point(0, 0), new Point(10, 0)),
+ *     new Segment(new Point(10, 0), new Point(10, 10)),
+ *   ],
+ * });
+ * graph.getShortestPath([0, 0], [10, 10]); // Segment[] of length 2
+ * ```
  */
 export class SpatialGraph extends Graph {
   constructor(options?: SpatialGraphOptions) {
@@ -50,7 +79,7 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Convert a point to a string key for use in graphology
+   * Convert a point to a string key for use in graphology (`"x,y"` after rounding)
    */
   protected nodeKey(point: NxPoint): string {
     const rounded = roundPoint(point);
@@ -58,7 +87,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get the coordinate-derived graphology key for a point.
+   * Get the coordinate-derived graphology key for a point, e.g. `"10,0"`.
+   * Use it when you need to call a raw graphology method such as `degree(key)`.
    */
   getPointKey(point: NxPoint): string {
     return this.nodeKey(point);
@@ -180,7 +210,10 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Add multiple segments to the graph
+   * Add multiple segments to the graph.
+   *
+   * A `Multiline` is added as its individual segments. `attrs[i]` is applied to
+   * every segment produced by `segments[i]`. Zero-length segments are skipped.
    */
   addSegments(segments: Array<Segment | Multiline>, attrs?: Array<Record<string, unknown>>): void {
     const normalizedSegments = this.normalizeSegments(segments, attrs);
@@ -191,7 +224,10 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Add a single segment to the graph
+   * Add a single segment to the graph, creating its end nodes when needed.
+   * Does nothing for a zero-length segment or when the edge already exists
+   * (existing attributes are kept). The `weight` attribute is set to the length
+   * between the rounded endpoints and overrides any `weight` in `attr`.
    */
   addSegment(segment: Segment, attr: Record<string, unknown> = {}): void {
     if (!hasValidLength(segment)) {
@@ -205,7 +241,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Add a vertex (node) to the graph
+   * Add a node without any edges. When the node exists, `attr` is merged into
+   * its attributes.
    */
   addVertex(point: NxPoint, attr: Record<string, unknown> = {}): void {
     const key = this.nodeKey(point);
@@ -216,15 +253,18 @@ export class SpatialGraph extends Graph {
     }
   }
 
+  /** Whether the graph has a node at this point (after rounding). */
   hasPointNode(point: NxPoint): boolean {
     return this.hasNode(this.nodeKey(point));
   }
 
+  /** Number of edges at this point; `0` when the point is not a node. */
   getPointDegree(point: NxPoint): number {
     const key = this.nodeKey(point);
     return this.hasNode(key) ? this.degree(key) : 0;
   }
 
+  /** Nodes connected to this point by an edge; `[]` when the point is not a node. */
   getPointNeighbors(point: NxPoint): NxPoint[] {
     const key = this.nodeKey(point);
     if (!this.hasNode(key)) return [];
@@ -235,11 +275,13 @@ export class SpatialGraph extends Graph {
     });
   }
 
+  /** Attributes of the node at this point; `{}` when the point is not a node. */
   getPointAttributes(point: NxPoint): NodeAttributes {
     const key = this.nodeKey(point);
     return this.hasNode(key) ? this.getNodeAttributes(key) : {};
   }
 
+  /** Merge `attrs` into the node's attributes, creating the node when it does not exist. */
   mergePointAttributes(point: NxPoint, attrs: Record<string, unknown>): void {
     const key = this.nodeKey(point);
     if (!this.hasNode(key)) {
@@ -250,25 +292,30 @@ export class SpatialGraph extends Graph {
     this.mergeNodeAttributes(key, attrs);
   }
 
+  /** Attributes of the edge between the two points; `null` when there is no such edge. */
   getEdgeAttributesFor(edge: NxEdge): EdgeAttributes | null {
     const edgeKey = this.findEdgeKey(edge[0], edge[1]);
     return edgeKey ? this.getEdgeAttributes(edgeKey) : null;
   }
 
+  /** Merge `attrs` into an existing edge's attributes; does nothing when there is no such edge. */
   mergeEdgePointAttributes(edge: NxEdge, attrs: Record<string, unknown>): void {
     const edgeKey = this.findEdgeKey(edge[0], edge[1]);
     if (!edgeKey) return;
     this.mergeEdgeAttributes(edgeKey, attrs);
   }
 
+  /** Remove the edge between the two points. Its end nodes stay in the graph. */
   removeEdge(edge: NxEdge): void {
     this.removeSegment(toFlattenSegment(edge));
   }
 
+  /** Remove several edges; see {@link SpatialGraph.removeEdge}. */
   removeEdges(edges: NxEdge[]): void {
     edges.forEach((edge) => this.removeEdge(edge));
   }
 
+  /** Remove the node at this point together with all its edges. */
   removePoint(point: NxPoint): void {
     const key = this.nodeKey(point);
     if (this.hasNode(key)) {
@@ -276,12 +323,13 @@ export class SpatialGraph extends Graph {
     }
   }
 
+  /** Remove several nodes and their edges; see {@link SpatialGraph.removePoint}. */
   removePoints(points: NxPoint[]): void {
     points.forEach((point) => this.removePoint(point));
   }
 
   /**
-   * Remove a segment from the graph
+   * Remove the edge that matches a segment. Its end nodes stay in the graph.
    */
   removeSegment(segment: Segment): void {
     const edge = fromFlattenSegment(segment);
@@ -294,7 +342,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get all edges as NxEdge array
+   * Get all edges as `[start, end]` point pairs, in graphology insertion order.
+   * The pair orientation is not guaranteed to match how the edge was added.
    */
   getEdges(): NxEdge[] {
     const edges: NxEdge[] = [];
@@ -342,7 +391,7 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get all junction nodes (degree > 2)
+   * Get all junction nodes: points where more than two edges meet (degree > 2).
    */
   getJunctions(): NxPoint[] {
     const junctions: NxPoint[] = [];
@@ -360,7 +409,7 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get all stub nodes (degree = 1)
+   * Get all stub nodes: dead ends with exactly one edge (degree = 1).
    */
   getStubs(): NxPoint[] {
     const stubs: NxPoint[] = [];
@@ -386,7 +435,9 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Check if a node has orthogonal edges (perpendicular edges)
+   * Whether any two edges at this node are perpendicular, within `toleranceDeg`
+   * degrees of 90 (default `DEFAULT_ANGLE_TOLERANCE_DEG`). `false` for a node
+   * with fewer than two edges or a point that is not a node.
    */
   hasOrthogonalEdges(node: NxPoint, toleranceDeg = DEFAULT_ANGLE_TOLERANCE_DEG): boolean {
     const key = this.nodeKey(node);
@@ -424,7 +475,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get all nodes that have orthogonal edges
+   * Get all nodes where at least two edges are perpendicular;
+   * see {@link SpatialGraph.hasOrthogonalEdges}.
    */
   getNodesWithOrthogonalEdges(toleranceDeg = DEFAULT_ANGLE_TOLERANCE_DEG): NxPoint[] {
     const nodes: NxPoint[] = [];
@@ -440,19 +492,22 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Find the nearest edge to a point
+   * Find the edge closest to a point (perpendicular distance to the segment).
+   * Linear in the number of edges.
+   *
+   * @throws Error when the graph has no edges. Check `graph.size > 0` first.
    */
   findNearestEdge(point: NxPoint | Point): Segment {
     const p = point instanceof Point ? point : toFlattenPoint(point);
     const edges = this.getSegments();
 
     if (edges.length === 0) {
-      throw new Error('Graph has no edges');
+      throw new Error(NO_EDGES_MESSAGE);
     }
 
     let nearestEdge: Segment | null = edges[0] || null;
     if (!nearestEdge) {
-      throw new Error('Graph has no edges');
+      throw new Error(NO_EDGES_MESSAGE);
     }
 
     let minDistance = nearestEdge.distanceTo(p)[0];
@@ -472,8 +527,11 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Project a point onto the closest edge
-   * Returns the projected point and the edge
+   * Snap a point onto the closest edge.
+   *
+   * @returns `[projected, edge]`: the closest point on the network (grid-snapped)
+   *   and the edge it lies on.
+   * @throws Error when the graph has no edges.
    */
   projectPointOnClosestEdge(point: NxPoint): [NxPoint, NxEdge] {
     const nearestEdge = this.findNearestEdge(point);
@@ -484,19 +542,21 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get the closest node to a point
+   * Get the node closest to a point. Linear in the number of nodes.
+   *
+   * @throws Error when the graph has no nodes.
    */
   getClosestNodeToPoint(point: Point | NxPoint): NxPoint {
     const p = point instanceof Point ? point : toFlattenPoint(point);
     const nodes = this.getNodes();
 
     if (nodes.length === 0) {
-      throw new Error('Graph has no nodes');
+      throw new Error(NO_NODES_MESSAGE);
     }
 
     let closestNode: NxPoint | null = nodes[0] || null;
     if (!closestNode) {
-      throw new Error('Graph has no nodes');
+      throw new Error(NO_NODES_MESSAGE);
     }
 
     let minDistance = toFlattenPoint(closestNode).distanceTo(p)[0];
@@ -516,8 +576,11 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get the shortest path between two points
-   * Returns an array of segments representing the path
+   * Get the shortest path between two nodes, weighted by edge length.
+   *
+   * @returns The path as consecutive segments from `start` to `end`. An empty
+   *   array when either point is not a node, the two are the same node, or no
+   *   route connects them; it never throws.
    */
   getShortestPath(start: NxPoint, end: NxPoint): Segment[] {
     const startKey = this.nodeKey(start);
@@ -553,7 +616,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get a subgraph containing only edges with a specific attribute value
+   * Build a new graph from the edges whose attribute `attrName` strictly equals
+   * `attrValue`. Node attributes are not copied.
    */
   getSubgraph(attrName: string, attrValue: unknown): SpatialGraph {
     const subgraph = new SpatialGraph();
@@ -573,7 +637,7 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Get filtered nodes based on a predicate function
+   * Get the nodes for which `filterPredicate(point, attributes)` is true.
    */
   getFilteredNodes(filterPredicate: FilterPredicate): NxPoint[] {
     const nodes: NxPoint[] = [];
@@ -589,8 +653,10 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Move a node to a new position
-   * Updates all connected edges
+   * Move a node to a new position; its edges follow it. Moving onto an existing
+   * node merges the two.
+   *
+   * @throws Error when `node` is not in the graph.
    */
   moveNode(node: NxPoint, newNode: NxPoint): void {
     this.moveNodes([[node, newNode]]);
@@ -602,15 +668,18 @@ export class SpatialGraph extends Graph {
    * All targets are resolved before the graph changes, so the moves apply
    * simultaneously: in `[[a, b], [b, c]]` node `a` lands on `b`'s old position
    * while `b` moves on to `c`, instead of `a` first collapsing into `b`.
-   * A node moved onto an existing node is merged into it. Throws before any
-   * change if a source node does not exist.
+   * A node moved onto an existing node is merged into it.
+   *
+   * @throws Error before any change if a source node does not exist.
    */
   moveNodes(nodesToMove: Array<[NxPoint, NxPoint]>): void {
     const moves = new Map<string, NxPoint>();
     for (const [node, newNode] of nodesToMove) {
       const oldKey = this.nodeKey(node);
       if (!this.hasNode(oldKey)) {
-        throw new Error('Node does not exist');
+        throw new Error(
+          `Node [${node[0]}, ${node[1]}] does not exist. Add it with addVertex(), or check hasPointNode() first.`,
+        );
       }
       if (!pointsEqual(node, newNode)) {
         moves.set(oldKey, newNode);
@@ -660,7 +729,9 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Collapse one point into another point, rewiring source incident edges to the target.
+   * Merge `source` into `target`: the source node is removed and its edges are
+   * rewired to the target, which is created when missing. Attributes are merged
+   * with the target's winning. Does nothing when `source` is not a node.
    */
   collapsePointInto(source: NxPoint, target: NxPoint): void {
     const sourceKey = this.nodeKey(source);
@@ -710,7 +781,7 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Remove a degree-1 point and its incident edge.
+   * Remove a dead-end node (degree 1) and its edge. Does nothing for any other node.
    */
   removeStubPoint(point: NxPoint): void {
     const key = this.nodeKey(point);
@@ -722,7 +793,9 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Remove a degree-2 point and join its neighbors with one edge.
+   * Remove a pass-through node (degree 2) and join its two neighbors with one
+   * edge. Does nothing for any other node. `attrs` replaces the joined edge's
+   * attributes; by default the two removed edges' attributes are merged.
    */
   removeDegree2PointAndJoin(point: NxPoint, attrs?: Partial<EdgeAttributes>): void {
     const key = this.nodeKey(point);
@@ -759,10 +832,12 @@ export class SpatialGraph extends Graph {
     this.addEdgeWithAttrs(firstPoint, secondPoint, joinedAttrs);
   }
 
+  /** Weight (length) of an edge; `0` when there is no such edge. */
   getEdgeWeight(edge: NxEdge): number {
     return this.getEdgeAttributesFor(edge)?.weight ?? 0;
   }
 
+  /** The heaviest edge along a node path; `null` for a path of fewer than two points. */
   getLongestEdgeInPath(path: NxPoint[]): NxEdge | null {
     if (path.length < 2) return null;
 
@@ -785,6 +860,7 @@ export class SpatialGraph extends Graph {
     return longestEdge;
   }
 
+  /** Total weight of the edges along a node path. Missing edges count as `0`. */
   getPathLength(path: NxPoint[]): number {
     let length = 0;
 
@@ -799,6 +875,13 @@ export class SpatialGraph extends Graph {
     return length;
   }
 
+  /**
+   * Plan a move that flattens a node path onto `line`: each node is projected
+   * onto the line. Stops at the first edge whose projection is shorter than
+   * `MIN_EDGE_MOVEMENT_DISTANCE`, and skips edges that would flip direction.
+   *
+   * @returns `[from, to]` pairs ready for {@link SpatialGraph.moveNodes}.
+   */
   calculatedMovement(path: NxPoint[], line: Segment): Array<[NxPoint, NxPoint]> {
     const nodesToMove: Array<[NxPoint, NxPoint]> = [];
 
@@ -828,6 +911,14 @@ export class SpatialGraph extends Graph {
     return nodesToMove;
   }
 
+  /**
+   * Trace open branches: chains that start at a dead end and follow degree-2
+   * nodes until they reach a node that is not pass-through (a junction or
+   * another dead end). Only `nodesSubset` is considered when given (default: the
+   * whole graph), and degrees are counted within that subset.
+   *
+   * @returns Each path as a node list, starting at its dead end.
+   */
   findIsolatedPaths(nodesSubset?: NxPoint[]): NxPoint[][] {
     const allowedKeys = nodesSubset ? new Set(nodesSubset.map((node) => this.nodeKey(node))) : null;
     const allowed = (key: string) => !allowedKeys || allowedKeys.has(key);
@@ -875,6 +966,13 @@ export class SpatialGraph extends Graph {
     return paths;
   }
 
+  /**
+   * Decompose the graph into simple paths that start and end at nodes that are
+   * not pass-through (degree 1, or 3 and up). Every edge is in exactly one path;
+   * a pure cycle comes back as one closed path.
+   *
+   * @returns Each path as a node list.
+   */
   findPaths(): NxPoint[][] {
     const visitedEdgeKeys = new Set<string>();
     const paths: NxPoint[][] = [];
@@ -935,8 +1033,10 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Split an edge at a point
-   * Removes the original edge and adds two new edges
+   * Split an edge at a point: the edge is replaced by two edges meeting at
+   * `point`, both inheriting its attributes. Does nothing when the edge does not
+   * exist or `point` is one of its endpoints. `point` is not required to lie on
+   * the edge.
    */
   splitEdge(edge: NxEdge, point: NxPoint): void {
     if (!this.findEdgeKey(edge[0], edge[1])) {
@@ -974,7 +1074,8 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Merge this graph with another graph
+   * Merge another graph into this one (mutates this graph). Existing nodes and
+   * edges keep their attributes; only missing ones are copied from `other`.
    */
   union(other: SpatialGraph): void {
     // Add all nodes from other graph
@@ -997,9 +1098,8 @@ export class SpatialGraph extends Graph {
   /**
    * The `label` attribute of a node, when it carries one.
    *
-   * Labels travel as ordinary attributes, so they survive `moveNode` and the
-   * collapse merges for free. What they do NOT survive is serialization — see
-   * `CirculationGraph.toGraphology`, which has to emit them explicitly.
+   * Labels are stored in the ordinary `label` attribute, so they survive
+   * `moveNode`, the collapse merges and graphology's `export()`/`import()`.
    */
   getNodeLabel(point: NxPoint): string | null {
     const key = this.nodeKey(point);
@@ -1009,7 +1109,7 @@ export class SpatialGraph extends Graph {
     return typeof label === 'string' ? label : null;
   }
 
-  /** Set (or, with `null`, clear) a node's label. */
+  /** Set (or, with `null`, clear) a node's label. Does nothing when the node does not exist. */
   setNodeLabel(point: NxPoint, label: string | null): void {
     const key = this.nodeKey(point);
     if (!this.hasNode(key)) return;
@@ -1027,7 +1127,7 @@ export class SpatialGraph extends Graph {
     return typeof label === 'string' ? label : null;
   }
 
-  /** Set (or, with `null`, clear) an edge's label. */
+  /** Set (or, with `null`, clear) an edge's label. Does nothing when the edge does not exist. */
   setEdgeLabel(edge: NxEdge, label: string | null): void {
     const key = this.findEdgeKey(edge[0], edge[1]);
     if (!key) return;
@@ -1040,8 +1140,7 @@ export class SpatialGraph extends Graph {
 
   /**
    * Split the graph into connected components, each listed as its own nodes.
-   * Plain BFS — graphology ships no component helper and pulling in
-   * `graphology-components` for one traversal isn't worth a dependency.
+   * Plain BFS, so no extra dependency is needed.
    */
   getConnectedComponents(): NxPoint[][] {
     const seen = new Set<string>();
@@ -1094,8 +1193,9 @@ export class SpatialGraph extends Graph {
   }
 
   /**
-   * Create a complete graph from a set of nodes
-   * Only adds edges that pass the validation callback
+   * Create a graph from a set of nodes, connecting every pair for which
+   * `isValidCb(a, b)` returns true (for example, pairs with a clear line of
+   * sight). Quadratic in the number of nodes.
    */
   static createCompleteGraph(nodes: NxPoint[], isValidCb: IsValidCallback): SpatialGraph {
     const graph = new SpatialGraph();
@@ -1119,6 +1219,11 @@ export class SpatialGraph extends Graph {
     return graph;
   }
 }
+
+const NO_EDGES_MESSAGE =
+  'Graph has no edges. Add segments with addSegment(s) first, or check graph.size > 0.';
+const NO_NODES_MESSAGE =
+  'Graph has no nodes. Add nodes with addVertex() or addSegment(s) first, or check graph.order > 0.';
 
 function orderedNodePairKey(first: string, second: string): string {
   return first < second ? `${first}|${second}` : `${second}|${first}`;

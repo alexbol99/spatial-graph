@@ -1,14 +1,23 @@
 {
   "name": "@flatten-js/spatial-graph",
   "version": "0.1.0",
-  "description": "Spatial graph built on graphology and @flatten-js/core: nodes are 2D points, edges are segments.",
+  "description": "Build, query and clean 2D line networks: points as nodes, segments as edges. Shortest paths, nearest-edge snapping, edge splitting, merging and network analysis, on graphology and @flatten-js/core.",
   "keywords": [
     "graph",
     "spatial",
     "geometry",
     "2d",
     "flatten-js",
-    "graphology"
+    "graphology",
+    "segments",
+    "network",
+    "routing",
+    "pathfinding",
+    "shortest-path",
+    "polyline",
+    "cad",
+    "gis",
+    "typescript"
   ],
   "license": "MIT",
   "author": "Alex Bol <alexbol99@gmail.com>",
@@ -40,6 +49,7 @@
   "files": [
     "dist",
     "README.md",
+    "llms.txt",
     "LICENSE"
   ],
   "sideEffects": false,
@@ -55,6 +65,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:package": "publint --strict && attw --pack .",
+    "check:examples": "tsc -p examples && for f in examples/*.ts; do node \"$f\" > /dev/null || exit 1; done",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
   },
   "peerDependencies": {

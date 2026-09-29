@@ -67,7 +67,7 @@ export function projectEdgeToLine(edge: NxEdge, line: Segment): NxEdge {
   return [fromFlattenPoint(projectedStart), fromFlattenPoint(projectedEnd)];
 }
 
-/** Nearest point on a segment to a query point, with the detail an annotation caller needs. */
+/** Nearest point on a segment to a query point, plus the position along it. */
 export interface NearestOnSegment {
   /** Closest point on the segment. */
   point: NxPoint;
@@ -80,10 +80,9 @@ export interface NearestOnSegment {
    * and the offset to it is not normal to the segment.
    *
    * A foot landing exactly on an endpoint is **not** clamped: it still lies on
-   * the segment and the offset is still perpendicular to it. Callers that need a
-   * true perpendicular offset rely on that distinction — two adjacent segments
-   * meeting at a shared vertex both report the vertex as unclamped, so neither
-   * is discarded.
+   * the segment and the offset is still perpendicular to it. Two adjacent
+   * segments meeting at a shared vertex therefore both report the vertex as
+   * unclamped, so a caller that needs a true perpendicular offset keeps both.
    */
   clamped: boolean;
 }
@@ -97,9 +96,9 @@ const PARAM_EPSILON = 1e-9;
  * Nearest point on `edge` to `point`, allocation-free.
  *
  * Differs from {@link projectPointOnSegment} in two ways that matter to callers
- * annotating the result: it reports the parameter along the edge and whether the
- * perpendicular foot had to be clamped, and it does no flatten-js conversion — so
- * it is safe to evaluate across many segments every frame.
+ * using the result: it reports the parameter along the edge and whether the
+ * perpendicular foot had to be clamped, and it does no flatten-js conversion, so
+ * it is cheap to evaluate across many segments.
  */
 export function nearestPointOnSegment(point: NxPoint, edge: NxEdge): NearestOnSegment {
   const [[ax, ay], [bx, by]] = edge;
