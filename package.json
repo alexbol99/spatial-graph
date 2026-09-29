@@ -1,0 +1,66 @@
+{
+  "name": "@flatten-js/spatial-graph",
+  "version": "0.1.0",
+  "description": "Spatial graph built on graphology and @flatten-js/core: nodes are 2D points, edges are segments.",
+  "keywords": [
+    "graph",
+    "spatial",
+    "geometry",
+    "2d",
+    "flatten-js",
+    "graphology"
+  ],
+  "license": "MIT",
+  "author": "Alex Bol <alexbol99@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexbol99/spatial-graph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alexbol99/spatial-graph/issues"
+  },
+  "homepage": "https://github.com/alexbol99/spatial-graph#readme",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "@flatten-js/core": "^1.6.12"
+  },
+  "dependencies": {
+    "graphology": "^0.25.4",
+    "graphology-shortest-path": "^2.1.0",
+    "graphology-types": "^0.24.8"
+  },
+  "devDependencies": {
+    "@flatten-js/core": "^1.6.12",
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@11.1.3"
+}
