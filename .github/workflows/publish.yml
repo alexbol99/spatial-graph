@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'            # e.g. v0.1.0
+
+permissions:
+  contents: read
+  id-token: write       # Required for OIDC trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.
+      # No dependency cache in the release job (cache-poisoning mitigation).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Check tag matches package.json version
+        run: |
+          version="v$(node -p 'require("./package.json").version')"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $version" >&2
+            exit 1
+          fi
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm check:package
+
+      # OIDC auth, no NPM_TOKEN; provenance is generated automatically.
+      # Scripts are skipped because the steps above already ran prepublishOnly's checks.
+      - name: Publish
+        run: npm publish --access public --ignore-scripts

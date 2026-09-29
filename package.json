@@ -1,0 +1,77 @@
+{
+  "name": "@flatten-js/spatial-graph",
+  "version": "0.1.0",
+  "description": "Spatial graph built on graphology and @flatten-js/core: nodes are 2D points, edges are segments.",
+  "keywords": [
+    "graph",
+    "spatial",
+    "geometry",
+    "2d",
+    "flatten-js",
+    "graphology"
+  ],
+  "license": "MIT",
+  "author": "Alex Bol <alexbol99@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexbol99/spatial-graph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alexbol99/spatial-graph/issues"
+  },
+  "homepage": "https://github.com/alexbol99/spatial-graph#readme",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:package": "publint --strict && attw --pack .",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
+  },
+  "peerDependencies": {
+    "@flatten-js/core": "^1.6.12"
+  },
+  "dependencies": {
+    "graphology": "^0.25.4",
+    "graphology-shortest-path": "^2.1.0",
+    "graphology-types": "^0.24.8"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@flatten-js/core": "^1.6.12",
+    "@types/node": "^24.0.0",
+    "publint": "^0.3.24",
+    "tsdown": "^0.23.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@11.1.3"
+}

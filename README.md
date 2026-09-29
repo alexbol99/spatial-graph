@@ -14,6 +14,9 @@ npm install @flatten-js/spatial-graph @flatten-js/core
 `@flatten-js/core` is a peer dependency, so your app and this library share one
 copy of `Point` and `Segment`.
 
+The package ships both ES modules and CommonJS, with TypeScript declarations for
+each. It requires Node.js 22 or later.
+
 ## Usage
 
 ```ts
@@ -46,8 +49,12 @@ Geometry helpers (`pointsEqual`, `getPointDistance`, `findIntersection`,
 `nearestPointOnSegment`, `projectPointOnSegment`, ...) and the types (`NxPoint`,
 `NxEdge`, `NodeAttributes`, `EdgeAttributes`, ...) are exported from the package root.
 
-Coordinates are rounded to `COORDINATE_PRECISION` (0 decimals by default) when
-building node keys.
+The graph lives on a coordinate grid: points are rounded to
+`COORDINATE_PRECISION` decimals (0 by default) to build node keys, so points that
+round to the same key are the same node. Helpers that return points
+(`fromFlattenPoint`, `findIntersection`, `projectPointOnSegment`, ...) snap
+their results to the same grid; checks such as `isPointOnSegment` and the
+validation inside `findIntersection` use exact coordinates.
 
 ## Development
 
@@ -55,18 +62,28 @@ building node keys.
 pnpm install
 pnpm typecheck
 pnpm test
-pnpm build      # tsc -> dist/
+pnpm build           # tsdown -> dist/ (ESM + CJS + .d.ts)
+pnpm check:package   # publint + are-the-types-wrong
 ```
 
 Sources are ESM with `.js` extensions on relative imports (`nodenext`).
 
-## Publishing
+## Releasing
 
-```sh
-npm login
-npm pack --dry-run   # inspect the tarball first
-npm publish          # runs typecheck, tests and build first (prepublishOnly)
-```
+Releases are published from GitHub Actions with
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers) (OIDC, no
+npm token), and npm generates provenance automatically.
+
+1. Bump `version` in `package.json` and merge to `main`.
+2. Tag the release and push the tag. The tag must match the version:
+
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+3. The `release` workflow (`.github/workflows/publish.yml`) checks the tag,
+   runs typecheck, tests, build and package checks, then runs `npm publish`.
 
 ## License
 
