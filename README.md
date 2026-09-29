@@ -15,7 +15,7 @@ npm install @flatten-js/spatial-graph @flatten-js/core
 copy of `Point` and `Segment`.
 
 The package ships both ES modules and CommonJS, with TypeScript declarations for
-each. It requires Node.js 20 or later.
+each. It requires Node.js 22 or later.
 
 ## Usage
 
