@@ -66,6 +66,9 @@
     "test": "vitest run",
     "check:package": "publint --strict && attw --pack .",
     "check:examples": "tsc -p examples && for f in examples/*.ts; do node \"$f\" > /dev/null || exit 1; done",
+    "demo": "vite --config src/demo/vite.config.ts",
+    "build:demo": "vite build --config src/demo/vite.config.ts",
+    "typecheck:demo": "vue-tsc --noEmit -p src/demo/tsconfig.json",
     "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
   },
   "peerDependencies": {
@@ -80,10 +83,14 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@flatten-js/core": "^1.6.12",
     "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^6.0.9",
     "publint": "^0.3.24",
     "tsdown": "^0.23.0",
     "typescript": "~5.9.3",
-    "vitest": "^4.0.18"
+    "vite": "^8.3.1",
+    "vitest": "^4.0.18",
+    "vue": "^3.5.43",
+    "vue-tsc": "^3.3.11"
   },
   "packageManager": "pnpm@11.1.3"
 }
