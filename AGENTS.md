@@ -19,9 +19,12 @@ pnpm test             # vitest run (src/**/*.spec.ts)
 pnpm build            # tsdown -> dist/ (ESM + CJS + .d.ts)
 pnpm check:package    # publint + are-the-types-wrong; run after build
 pnpm check:examples   # typecheck and run examples/*.ts against dist; run after build
+pnpm typecheck:demo   # vue-tsc --noEmit on src/demo
+pnpm build:demo       # vite build of the demo -> demo-dist/
+pnpm demo             # dev server for the demo on localhost
 ```
 
-Run typecheck, test, build, check:package and check:examples before opening a PR. CI runs the same.
+Run typecheck, typecheck:demo, test, build, build:demo, check:package and check:examples before opening a PR. CI runs the same.
 
 ## Layout
 
@@ -30,6 +33,12 @@ Run typecheck, test, build, check:package and check:examples before opening a PR
 - `src/types.ts`, `src/constants.ts`: public types and tunables.
 - `src/index.ts`: the public surface. Everything exported here is public API.
 - `src/__tests__/*.node.spec.ts`: tests next to the code they cover.
+- `src/demo/`: the interactive graph editor demo (Vue 3 + SVG), see
+  `docs/graph-editor-design.md`. Not part of the package and not public API; the
+  root `tsconfig.json` excludes it and `src/demo/tsconfig.json` checks it.
+  `src/demo/editor/` is framework-free TypeScript with tests; the `.vue` files only
+  translate DOM events and draw. The demo imports the package by name, which Vite
+  and Vitest alias to `src/index.ts`.
 - `examples/*.ts`: runnable examples that assert their own results. `pnpm test` runs
   them against `src`; `pnpm check:examples` runs them against `dist`. Not published.
 
