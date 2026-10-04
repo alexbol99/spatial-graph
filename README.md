@@ -163,6 +163,23 @@ Geometry helpers (`pointsEqual`, `getPointDistance`, `findIntersection`,
   graphology ones (`degree('x,y')`). When you need a raw node key, use
   `getPointKey(point)`.
 
+## Interactive demo
+
+A graph editor built on `SpatialGraph`, to try the editing methods by hand: drag
+vertices and whole runs of edges, split an edge by adding a vertex, merge a vertex
+into another or onto an edge, draw new edges that split what they cross, and
+delete with undo. It is a Vue 3 + SVG app in [`src/demo`](src/demo) and is not part
+of the published package.
+
+```sh
+pnpm install
+pnpm demo            # http://localhost:5173 (the next free port if that is taken)
+```
+
+It runs against the sources in `src`, so there is no need to build first. It needs
+a mouse and keyboard. The design is in
+[`docs/graph-editor-design.md`](docs/graph-editor-design.md).
+
 ## Development
 
 ```sh
@@ -171,6 +188,9 @@ pnpm typecheck
 pnpm test
 pnpm build           # tsdown -> dist/ (ESM + CJS + .d.ts)
 pnpm check:package   # publint + are-the-types-wrong
+pnpm check:examples  # typecheck and run examples/ against dist
+pnpm typecheck:demo  # vue-tsc on src/demo
+pnpm build:demo      # production build of the demo into demo-dist/
 ```
 
 Sources are ESM with `.js` extensions on relative imports (`nodenext`).

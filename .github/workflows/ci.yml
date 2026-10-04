@@ -39,11 +39,17 @@ jobs:
       - name: Type check
         run: pnpm typecheck
 
+      - name: Type check the demo
+        run: pnpm typecheck:demo
+
       - name: Test
         run: pnpm test
 
       - name: Build
         run: pnpm build
+
+      - name: Build the demo
+        run: pnpm build:demo
 
       - name: Check package (publint + attw)
         run: pnpm check:package

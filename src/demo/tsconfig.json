@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2023", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "jsx": "preserve",
+    "types": ["node", "vite/client"],
+    "paths": { "@flatten-js/spatial-graph": ["../index.ts"] }
+  },
+  "include": ["./**/*.ts", "./**/*.vue"],
+  "exclude": []
+}

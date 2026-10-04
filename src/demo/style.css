@@ -1,0 +1,83 @@
+:root {
+  --bg: #f4f5f8;
+  --surface: #ffffff;
+  --grid: #e3e7ee;
+  --body: #cfd9e8;
+  --body-edge: #9db0cc;
+  --ink: #3a4559;
+  --hover: #2f6fed;
+  --select: #e0900a;
+  --snap: #1f9d55;
+  --collapse: #d93a3a;
+  --text: #1c2230;
+  --muted: #667085;
+  --border: #d8dce5;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.06), 0 4px 14px rgb(16 24 40 / 0.08);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #11141a;
+    --surface: #1a1f28;
+    --grid: #232937;
+    --body: #34435d;
+    --body-edge: #5470a0;
+    --ink: #b4c0d6;
+    --hover: #6ea2ff;
+    --select: #f4b94a;
+    --snap: #4cc380;
+    --collapse: #ff7070;
+    --text: #e7eaf0;
+    --muted: #9aa5b8;
+    --border: #2b3242;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #11141a;
+  --surface: #1a1f28;
+  --grid: #232937;
+  --body: #34435d;
+  --body-edge: #5470a0;
+  --ink: #b4c0d6;
+  --hover: #6ea2ff;
+  --select: #f4b94a;
+  --snap: #4cc380;
+  --collapse: #ff7070;
+  --text: #e7eaf0;
+  --muted: #9aa5b8;
+  --border: #2b3242;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.4);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
