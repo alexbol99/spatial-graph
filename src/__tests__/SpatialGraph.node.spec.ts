@@ -55,6 +55,64 @@ describe('SpatialGraph', () => {
     });
   });
 
+  describe('copies', () => {
+    it('preserves spatial methods, keys and shallow attributes in independent copies', () => {
+      const graph = new SpatialGraph();
+      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)));
+      graph.addNode(graph.getPointKey([20, 0]), { label: 'isolated' });
+      const metadata = { nested: true };
+      graph.setAttribute('metadata', metadata);
+      graph.setNodeLabel([0, 0], 'origin');
+      const copied = graph.copy();
+      const empty = graph.emptyCopy();
+      const blank = graph.nullCopy();
+      for (const result of [copied, empty, blank]) {
+        expect(result).toBeInstanceOf(SpatialGraph);
+        expect(result.type).toBe('undirected');
+        expect(result.multi).toBe(false);
+        expect(result.allowSelfLoops).toBe(graph.allowSelfLoops);
+        expect(result.getAttributes()).not.toBe(graph.getAttributes());
+        expect(result.getAttribute('metadata')).toBe(metadata);
+      }
+      expect(copied.export()).toEqual(graph.export());
+      expect(copied.edges()).toEqual(graph.edges());
+      expect(copied.getShortestPath([0, 0], [10, 0])).toHaveLength(1);
+      expect(empty.nodes()).toEqual(graph.nodes());
+      expect(empty.size).toBe(0);
+      expect(blank.order).toBe(0);
+      expect(blank.size).toBe(0);
+      copied.setNodeLabel([0, 0], 'changed');
+      copied.setEdgeAttribute(copied.edges()[0]!, 'weight', 99);
+      copied.dropNode(copied.getPointKey([20, 0]));
+      empty.setNodeLabel([0, 0], 'empty');
+      expect(graph.getNodeLabel([0, 0])).toBe('origin');
+      expect(graph.getEdgeAttributes(graph.edges()[0]!).weight).toBe(10);
+      expect(graph.order).toBe(3);
+    });
+
+    it('copies empty graphs and preserves compatible options', () => {
+      const graph = new SpatialGraph({ allowSelfLoops: false });
+      for (const result of [graph.copy(), graph.emptyCopy(), graph.nullCopy()]) {
+        expect(result).toBeInstanceOf(SpatialGraph);
+        expect(result.order).toBe(0);
+        expect(result.size).toBe(0);
+        expect(result.allowSelfLoops).toBe(false);
+      }
+      expect(graph.copy({ allowSelfLoops: true }).allowSelfLoops).toBe(true);
+      expect(new SpatialGraph().emptyCopy({ allowSelfLoops: false }).allowSelfLoops).toBe(false);
+    });
+
+    it('rejects options that break spatial graph invariants', () => {
+      const graph = new SpatialGraph();
+      for (const method of ['copy', 'emptyCopy', 'nullCopy'] as const) {
+        expect(() => graph[method]({ type: 'mixed' })).toThrow();
+        expect(() => graph[method]({ type: 'directed' })).toThrow();
+        expect(() => graph[method]({ multi: true })).toThrow();
+      }
+      expect(() => graph.copy({ allowSelfLoops: false })).toThrow();
+    });
+  });
+
   describe('addSegment', () => {
     it('should skip a segment whose ends round to the same node', () => {
       const graph = new SpatialGraph();

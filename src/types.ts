@@ -52,6 +52,8 @@ export type IntersectionResult = {
  * Constructor options for SpatialGraph
  */
 export type SpatialGraphOptions = {
+  /** Allow self-loops through raw graphology methods (default: true). */
+  allowSelfLoops?: boolean;
   segments?: Array<Segment | Multiline>;
   attrs?: Array<Record<string, unknown>>;
 };

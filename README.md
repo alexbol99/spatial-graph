@@ -109,7 +109,12 @@ const proximity = SpatialGraph.createCompleteGraph(
 **Save and load**
 
 The graph serializes with graphology's own JSON format. Load into a new
-`SpatialGraph`; `copy()` and `Graph.from()` return a plain graphology `Graph`.
+`SpatialGraph`. `copy()` preserves all nodes and edges, `emptyCopy()` keeps only
+nodes, and `nullCopy()` keeps only graph attributes; all three return a
+`SpatialGraph` with shallow-copied attributes. Copy options must keep the graph
+undirected and simple. The constructor accepts `allowSelfLoops` (default `true`)
+for raw graphology calls; point-based segment methods always skip self-loops.
+`Graph.from()` returns a plain graphology `Graph`.
 
 ```ts
 const json = JSON.stringify(graph.export());
@@ -143,9 +148,11 @@ Geometry helpers (`pointsEqual`, `getPointDistance`, `findIntersection`,
   grid; checks such as `isPointOnSegment` and the validation inside
   `findIntersection` use exact coordinates. `findLineIntersection` returns the
   exact intersection of the lines through two edges.
-- **The graph is undirected and simple.** No parallel edges and no self-loops.
-  Zero-length segments, and segments whose ends round to the same node, are
-  skipped without an error.
+- **The graph is undirected and simple.** No parallel edges. Point-based segment
+  methods skip self-loops: zero-length segments, and segments whose ends round
+  to the same node, are skipped without an error. Raw graphology methods allow
+  self-loops by default; pass `allowSelfLoops: false` to the constructor to
+  disallow them.
 - **`weight` is the segment length** and is set for you. Path finding uses it.
 - **Queries on a missing point return an empty value** (`[]`, `null`, `{}`, `0`
   or `false`) instead of throwing. The exceptions that throw are

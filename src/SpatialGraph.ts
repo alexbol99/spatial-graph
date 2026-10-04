@@ -1,5 +1,5 @@
 import graphology from 'graphology';
-import type { GraphConstructor } from 'graphology-types';
+import type { GraphConstructor, GraphOptions } from 'graphology-types';
 import { dijkstra } from 'graphology-shortest-path';
 import { Segment, Point, Multiline } from '@flatten-js/core';
 import type {
@@ -48,15 +48,17 @@ const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttr
  * - Nodes are keyed by their coordinates rounded to `COORDINATE_PRECISION`
  *   decimals (0 by default, i.e. whole numbers). Points that round to the same
  *   key are the same node.
- * - The graph is undirected and simple: no parallel edges, no self-loops.
- *   Zero-length segments, and segments whose endpoints round to the same node,
- *   are silently skipped.
+ * - The graph is undirected and simple: no parallel edges. Point-based segment
+ *   methods silently skip self-loops, including zero-length segments and
+ *   endpoints that round to the same node. Raw graphology methods allow
+ *   self-loops by default; pass `allowSelfLoops: false` to the constructor
+ *   to disallow them.
  * - Edge attribute `weight` is the segment length and is what path finding uses.
  * - Query methods on a missing point return an empty value (`[]`, `null`, `{}`,
  *   `0` or `false`) rather than throwing, unless a method says otherwise.
  * - To serialize, use graphology: `new SpatialGraph().import(graph.export())`.
- *   `copy()` and `Graph.from()` return a plain graphology `Graph`, not a
- *   `SpatialGraph`.
+ *   `copy()`, `emptyCopy()` and `nullCopy()` return a `SpatialGraph`.
+ *   `Graph.from()` returns a plain graphology `Graph`.
  *
  * @example
  * ```ts
@@ -71,11 +73,45 @@ const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttr
  */
 export class SpatialGraph extends Graph {
   constructor(options?: SpatialGraphOptions) {
-    super({ type: 'undirected', multi: false });
+    super({ type: 'undirected', multi: false, allowSelfLoops: options?.allowSelfLoops ?? true });
 
     if (options?.segments) {
       this.addSegments(options.segments, options.attrs);
     }
+  }
+
+  /**
+   * Return a SpatialGraph with shallow-copied graph attributes and no nodes or edges.
+   * An empty source also returns an empty SpatialGraph.
+   * @throws If options request a directed, mixed or multi graph; use undirected and multi: false.
+   * @throws If graphology options are invalid; pass valid GraphOptions.
+   */
+  override nullCopy(options?: Partial<GraphOptions>): SpatialGraph {
+    if ((options?.type !== undefined && options.type !== 'undirected') ||
+        (options?.multi !== undefined && options.multi !== false)) {
+      throw new Error('SpatialGraph copies must be undirected and simple; use type: "undirected" and multi: false.');
+    }
+    const graph = new SpatialGraph({ allowSelfLoops: options?.allowSelfLoops ?? this.allowSelfLoops });
+    graph.replaceAttributes({ ...this.getAttributes() });
+    return graph;
+  }
+
+  /**
+   * Return a SpatialGraph with shallow-copied graph and node attributes, without edges.
+   * An empty source also returns an empty SpatialGraph.
+   * @throws If options are invalid or request a directed, mixed or multi graph; use valid undirected, simple options.
+   */
+  override emptyCopy(options?: Partial<GraphOptions>): SpatialGraph {
+    return super.emptyCopy(options) as SpatialGraph;
+  }
+
+  /**
+   * Return a SpatialGraph with all nodes, edges, keys and shallow-copied attributes.
+   * An empty source also returns an empty SpatialGraph.
+   * @throws If options are invalid or incompatible; keep the graph undirected and simple and do not disable allowed self-loops.
+   */
+  override copy(options?: Partial<GraphOptions>): SpatialGraph {
+    return super.copy(options) as SpatialGraph;
   }
 
   /**
