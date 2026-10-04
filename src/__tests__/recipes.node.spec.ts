@@ -109,7 +109,8 @@ describe('documented recipes', () => {
 
     expect(restored).toBeInstanceOf(SpatialGraph);
     expect(restored.getEdges()).toEqual(graph.getEdges());
-    expect(graph.copy()).not.toBeInstanceOf(SpatialGraph);
+    expect(graph.copy()).toBeInstanceOf(SpatialGraph);
+    expect(graph.copy().getEdges()).toEqual(graph.getEdges());
   });
 });
 

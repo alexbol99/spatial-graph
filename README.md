@@ -109,7 +109,12 @@ const proximity = SpatialGraph.createCompleteGraph(
 **Save and load**
 
 The graph serializes with graphology's own JSON format. Load into a new
-`SpatialGraph`; `copy()` and `Graph.from()` return a plain graphology `Graph`.
+`SpatialGraph`. `copy()` preserves all nodes and edges, `emptyCopy()` keeps only
+nodes, and `nullCopy()` keeps only graph attributes; all three return a
+`SpatialGraph` with shallow-copied attributes. Copy options must keep the graph
+undirected and simple. The constructor accepts `allowSelfLoops` (default `true`)
+for raw graphology calls; point-based segment methods always skip self-loops.
+`Graph.from()` returns a plain graphology `Graph`.
 
 ```ts
 const json = JSON.stringify(graph.export());
