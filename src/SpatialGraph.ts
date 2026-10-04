@@ -48,9 +48,11 @@ const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttr
  * - Nodes are keyed by their coordinates rounded to `COORDINATE_PRECISION`
  *   decimals (0 by default, i.e. whole numbers). Points that round to the same
  *   key are the same node.
- * - The graph is undirected and simple: no parallel edges, no self-loops.
- *   Zero-length segments, and segments whose endpoints round to the same node,
- *   are silently skipped.
+ * - The graph is undirected and simple: no parallel edges. Point-based segment
+ *   methods silently skip self-loops, including zero-length segments and
+ *   endpoints that round to the same node. Raw graphology methods allow
+ *   self-loops by default; pass `allowSelfLoops: false` to the constructor
+ *   to disallow them.
  * - Edge attribute `weight` is the segment length and is what path finding uses.
  * - Query methods on a missing point return an empty value (`[]`, `null`, `{}`,
  *   `0` or `false`) rather than throwing, unless a method says otherwise.
