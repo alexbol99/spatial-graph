@@ -1,0 +1,1402 @@
+# SpatialGraph audit and refactoring proposal
+
+Date: 2026-10-05. Status: design proposal; no library behavior has been changed.
+
+Audited baseline: `main`, commit
+[`6aefd1f`](https://github.com/alexbol99/spatial-graph/tree/6aefd1fda1c0065b16ff3b87473590a6a0386a0b),
+package version `1.0.1`. This document was prepared on
+`codex/spatial-graph-refactoring-audit`, created directly from that commit after
+confirming local `main` and `origin/main` matched.
+
+### Contents
+
+1. [Recommendation and scope](#1-recommendation-and-scope)
+2. [Audit method and baseline validation](#2-audit-method-and-baseline-validation)
+3. [Findings](#3-findings-grounded-in-the-current-implementation)
+4. [Target data model](#4-target-data-model)
+5. [Graphology architecture and ownership](#5-graphology-architecture-and-ownership)
+6. [Coordinates, precision, and exact geometry](#6-coordinates-precision-and-exact-geometry)
+7. [Public API and migration](#7-proposed-public-api-and-migration)
+8. [Mutation contracts and metadata](#8-mutation-contracts-and-metadata-policy)
+9. [Algorithms and feature boundaries](#9-algorithms-performance-and-feature-boundaries)
+10. [Serialization, exports, and dependencies](#10-serialization-adapters-exports-and-dependencies)
+11. [Open issue disposition](#11-disposition-of-every-current-open-issue)
+12. [Implementation layout](#12-suggested-implementation-layout)
+13. [Implementation phases](#13-implementation-phases-and-acceptance-gates)
+14. [Verification plan](#14-verification-plan-for-the-refactor)
+15. [Decisions and risks](#15-decisions-and-risks-to-carry-into-implementation)
+
+[Appendix: reproducible probes](#appendix-a-reproducing-the-main-correctness-probes)
+
+## 1. Recommendation and scope
+
+Refactor the library around explicit graph elements and separate geometric
+values. Introduce `SpatialNode` and `SpatialEdge` classes as immutable snapshots,
+provide consistent node/edge methods on `SpatialGraph`, and centralize coordinate
+normalization, mutation, and attribute handling.
+
+For the target API, I recommend **composition with Graphology**: `SpatialGraph`
+owns a private Graphology graph instead of extending it. This is an architectural
+recommendation, not a decision already agreed in our discussion. It permits
+consistent methods such as `addNode(point)` without conflicting with inherited
+key-based methods, and prevents raw graph mutations from bypassing spatial
+invariants. Section 5 compares the alternatives and defines the migration cost.
+
+The company controls the only current consuming project and accepts breaking
+changes. Make one coordinated major-version migration, rather than maintaining
+old aliases and multiple incompatible models. Use `2.0.0` as the proposed release
+boundary; implementation phases below can be separate branches/PRs before release.
+
+The first release should establish a sound model, correct geometry and mutations,
+consistent queries, and structured length-based routing. Custom routing cost is
+a natural extension of that model. A spatial index, planarization, and adapters
+follow it; directed graphs, arcs, and face extraction should not hold up the core
+refactor.
+
+### Requirements carried forward from our discussion
+
+- `graph.getNode(point)` returns an object usable as `node?.type`.
+- Node and edge classes do not extend Graphology node/edge classes; Graphology
+  stores keyed elements and attribute dictionaries, not such base classes.
+- Returned objects have no reference to their graph. They describe the state at
+  retrieval time; fetch again after editing to obtain current topology/attributes.
+- Moving removes the old node and creates or merges a destination node; retained
+  objects do not follow the move.
+- Equality is coordinate-based within one graph. Cross-graph identity checking
+  and lifetime tokens are not requirements.
+- Nodes provide a Euclidean distance operation and an equality predicate.
+- Graph methods expose node classification, edge midpoint, and geometric length;
+  edge snapshots also expose convenient properties.
+- Node/edge refers to graph membership; point/segment refers to geometry. A
+  midpoint or projection is a point, not automatically a node.
+
+Five node classifications, exact coordinates by default, composition, and the
+specific API names below are recommendations in this document. They were not
+all explicitly settled in the conversation.
+
+## 2. Audit method and baseline validation
+
+Read the full `SpatialGraph` implementation, public types/constants/exports,
+geometry helpers, tests, all examples, README, `llms.txt`, package configuration,
+and CI/release workflows. Retrieved all 12 currently open GitHub issues, checked
+the status of issue #8 and its merged PR, and inspected the description/file list
+of the open editor-demo PR. The open issues had no comments at retrieval time.
+
+Ran the existing checks on the baseline using Node `24.14.0` and pnpm `11.1.3`:
+
+| Check | Result |
+| --- | --- |
+| `pnpm typecheck` | Passed |
+| `pnpm test` | Passed: 115 tests in 6 files, including runnable examples |
+| `pnpm build` | Passed: ESM, CJS, and both declaration formats |
+| `pnpm check:package` | Passed: publint and are-the-types-wrong |
+| `pnpm check:examples` | Passed against built `dist` |
+
+Additional behavioral probes ran against that build. They are described below;
+these probes are diagnostic evidence, not newly committed library tests. The
+115 passing tests validate existing expectations, including some behavior this
+proposal intentionally changes. No browser-runtime matrix, external consuming
+project, fuzz campaign, or performance benchmark was run. Timings in issue #4
+are historical issue-author measurements, not measurements from this audit.
+
+Important existing strengths to preserve:
+
+- Small package, explicit ESM/CJS exports, shipping declarations and JSDoc.
+- Shared Flatten peer dependency and runnable documentation recipes.
+- Simultaneous movement planning and existing merge/copy tests.
+- Undirected simple graph semantics and generic spatial use cases.
+- Tag-driven publishing with provenance; no local npm publishing.
+
+## 3. Findings grounded in the current implementation
+
+Priority describes implementation order: P1 means a correctness/invariant issue
+to address before adopting the redesigned API; P2 means API, maintainability, or
+performance work. Feature requests are listed separately from defects.
+
+### A1 — P1: spatial invariants can be bypassed through inherited methods
+
+Source: [`SpatialGraph` inheritance and `parseNode`](../src/SpatialGraph.ts).
+Related: [#10](https://github.com/alexbol99/spatial-graph/issues/10),
+[#11](https://github.com/alexbol99/spatial-graph/issues/11),
+[#12](https://github.com/alexbol99/spatial-graph/issues/12).
+
+`addNode('label')` is valid Graphology usage, but the node disappears from
+`getNodes()` because its key cannot be parsed as coordinates. `addNode('1junk,2')`
+is reported by `getNodes()` as `[1, 2]`, because `parseFloat` accepts the numeric
+prefix. Point-based lookups then generate the different key `"1,2"`.
+
+Probe: after adding those two raw keys, `order === 2`, while `getNodes()` returns
+only `[[1, 2]]`. Thus graph order, spatial iteration, and point lookup disagree.
+Raw imports can introduce the same problem. Self-loops are also allowed through
+raw methods by default but skipped by spatial insertion methods.
+
+Recommendation: own the storage boundary; validate every insertion/import;
+store coordinates explicitly; reject unsupported topology. If inheritance is
+retained, all raw mutation paths need a documented and tested validation policy.
+Post-mutation events alone do not make invalid mutations atomic.
+
+### A2 — P1: snapping can produce a projected point outside its claimed edge
+
+Source: [`projectPointOnClosestEdge`](../src/SpatialGraph.ts),
+[`projectPointOnSegment`](../src/utils/projection.ts), and
+[`fromFlattenPoint`](../src/utils/geometry.ts).
+Related: [#15](https://github.com/alexbol99/spatial-graph/issues/15),
+[#9](https://github.com/alexbol99/spatial-graph/issues/9).
+
+For edge `[[0, 0], [3, 1]]` and query `[1, 1]`, the exact nearest point is
+approximately `[1.2, 0.4]`. The graph projection method returns `[1, 0]`, which
+is not on that segment. This contradicts the result's description as the point
+on the returned edge. The snap/split recipe then introduces a bend.
+
+Recommendation: exact geometry results; quantize only at graph insertion when
+the graph is configured to do so. If quantization moves a split point off its
+edge, reject the split by default and report the reason. Explicitly changing
+geometry must be a different, deliberate operation.
+
+### A3 — P1: malformed numeric coordinates are not rejected
+
+Source: [`roundPoint`](../src/utils/geometry.ts), `addVertex`, and `parseNode`.
+Related: [#15](https://github.com/alexbol99/spatial-graph/issues/15).
+
+Probe: `addVertex([Infinity, 0])` and `addVertex([NaN, 0])` both add Graphology
+nodes. Spatial iteration exposes the infinite coordinate and omits the NaN one.
+JSON stringification renders Infinity as `null`, obscuring the underlying value.
+
+Recommendation: require two finite coordinates at graph boundaries and validate
+normalization results. Invalid data throws an actionable error before mutation;
+it is not treated as a harmless skipped degenerate segment. Also validate
+precision, tolerances, and algorithm parameters.
+
+### A4 — P1: `weight`, geometric length, and user metadata can diverge
+
+Source: `addEdgeWithAttrs`, `getEdgeWeight`, `getPathLength`, and
+`getShortestPath` in [`SpatialGraph.ts`](../src/SpatialGraph.ts).
+Related: [#5](https://github.com/alexbol99/spatial-graph/issues/5),
+[#9](https://github.com/alexbol99/spatial-graph/issues/9).
+
+Insertion overrides user `weight` with geometric length, but attribute access
+returns live dictionaries. Probe: assigning `-5` through `getEdgeAttributesFor`
+changes both `getEdgeWeight` and `getPathLength` to `-5` for a length-10 edge.
+Rebuilding that edge during a move recalculates weight again. Routing therefore
+does not always mean the geometric length claimed by the documentation.
+
+`getPathLength` silently assigns zero to missing path edges.
+`getLongestEdgeInPath` can return a pair that is not an actual graph edge, because
+missing edges participate with weight zero.
+
+Recommendation: compute geometric length from endpoints; keep user attributes
+separate; use an explicit cost callback for routing; return `null` for nonexistent
+graph edges/invalid graph paths. Reject negative/non-finite costs before routing.
+
+### A5 — P1: splitting and simplification need explicit geometric contracts
+
+Source: `splitEdge` and `removeDegree2PointAndJoin`.
+Related: [#9](https://github.com/alexbol99/spatial-graph/issues/9),
+[#7](https://github.com/alexbol99/spatial-graph/issues/7).
+
+Probe: splitting `[[0, 0], [10, 0]]` at `[5, 50]` creates a dogleg, as currently
+documented. Removing the apex of a triangle leaves two nodes and one edge,
+destroying the cycle. Removing a bent degree-2 node otherwise replaces two
+segments by a chord and changes total geometric length.
+
+These are current supported behaviors, but names such as split and pass-through
+cleanup invite a stronger expectation of geometry preservation.
+
+Recommendation: validated splitting by default; a safe `joinNode` operation
+that only removes straight degree-2 nodes and rejects an already-connected pair
+of neighbors. Preserve deliberate bend removal under a separately named
+`collapseDegree2Node` operation, with documented cycle/topology effects.
+
+### A6 — P1: simultaneous movement is not order-independent under conflicts
+
+Source: `moveNodes` and `collapsePointInto`.
+Related: [#13](https://github.com/alexbol99/spatial-graph/issues/13).
+
+Movement does correctly snapshot sources before dropping them. However, when
+two moved nodes arrive at the same empty destination and carry conflicting
+attributes, the first inserted node wins. Probe: sources with `{value: 'a'}` and
+`{value: 'b'}` moved to `[20, 0]` yield `'a'` in one input order and `'b'` when
+the input order is reversed. Repeated entries for one source also use the last
+destination. Recreated duplicate edges can discard metadata, while collapse
+uses a different merge rule.
+
+Recommendation: reject contradictory moves for one source; canonicalize merge
+groups; apply one conflict policy shared by moves, merges, splits, and union.
+Do not claim unconditional order independence unless conflicts are defined.
+
+### A7 — P2: public names and result types do not express one model
+
+Source: [`types.ts`](../src/types.ts) and the full public `SpatialGraph` API.
+Related: [#11](https://github.com/alexbol99/spatial-graph/issues/11).
+
+Node lists use `NxPoint`, vertex lists use Flatten `Point`, nearest-edge and
+shortest-path queries use Flatten `Segment`, and edge lookup uses endpoint
+tuples. Object identity, geometric location, and graph membership must be
+reconstructed separately by callers. Attribute names mix point, node, and edge.
+
+Recommendation: element queries return snapshot classes; geometric calculations
+return coordinates/segment values; Flatten conversion methods say `Flatten` in
+their names. The migration table in section 7 covers the current methods.
+
+### A8 — P2: geometry conversion also changes coordinates
+
+Source: `fromFlattenPoint`, `fromFlattenSegment`, `findIntersection`,
+`findLineIntersection`, and projection helpers.
+Related: [#15](https://github.com/alexbol99/spatial-graph/issues/15),
+[#7](https://github.com/alexbol99/spatial-graph/issues/7).
+
+Some helpers quantize through the global precision and others return exact
+values. `findIntersection` returns a rounded crossing, but
+`findLineIntersection` returns an exact crossing. `nearestPointOnSegment`
+returns exact coordinates while `projectPointOnSegment` snaps.
+
+Recommendation: pure conversions preserve coordinates; pure geometry is exact
+within floating-point arithmetic; graph normalization is an explicit policy.
+Separate identity quantization, positional tolerance, and angle tolerance.
+
+### A9 — P2: unnecessary parsing/allocation and queue shifting in hot paths
+
+Source: `findNearestEdge`, `getClosestNodeToPoint`, `getConnectedComponents`,
+and [`nearestPointOnSegments`](../src/utils/projection.ts).
+Related: [#4](https://github.com/alexbol99/spatial-graph/issues/4),
+[#10](https://github.com/alexbol99/spatial-graph/issues/10).
+
+Nearest queries are linear scans; nearest-edge querying materializes all
+Flatten segments. Components use `queue.shift()` and repeatedly convert points
+back to keys. Algorithms commonly parse coordinate strings.
+
+The existing nearest-point helper avoids Flatten objects, but is **not literally
+allocation-free**: it allocates tuples and result objects per candidate. Its
+JSDoc and issue #4 overstate this property. Reusing it is still a plausible
+optimization, but the claimed speedup needs measurement.
+
+Recommendation: traverse internal records/keys; use a head-index queue; compute
+candidate distances without constructing public snapshots; materialize only
+the winner. Add benchmarks before selecting and adding an index dependency.
+
+### A10 — P2: subgraph extraction loses data and policy
+
+Source: `getSubgraph`, `union`, and copy methods.
+Related: [#10](https://github.com/alexbol99/spatial-graph/issues/10),
+[#15](https://github.com/alexbol99/spatial-graph/issues/15).
+
+Probe: extracting a selected edge loses its endpoint's `{label: 'start'}` and
+the graph's `{label: 'network'}` attributes. This loss is documented for node
+attributes; graph attributes are also not copied. A new subgraph always uses
+default constructor options. Adding configurable precision without changing
+this would compound the problem. Union already has a useful documented
+destination-wins policy, but uses raw Graphology keys and permits shallow sharing.
+
+Recommendation: extraction and all copies preserve coordinate policy and copy
+graph/node/edge attributes according to one documented ownership policy.
+
+### A11 — P2: public surface contains application assumptions and hidden policies
+
+Source: [`index.ts`](../src/index.ts), [`constants.ts`](../src/constants.ts),
+[`types.ts`](../src/types.ts), and `splitEdge`.
+Related: [#6](https://github.com/alexbol99/spatial-graph/issues/6).
+
+Root wildcard exports expose every utility and constant. `calculatedMovement`
+uses a fixed minimum movement distance of 8. `width`, `clearanceWidth`, `radius`,
+and `closestGeoms` are built into attribute types. `IntersectionResult` and
+`SIMPLE_SEGMENT_COORDS` are unused. Additionally, splitting rewrites a user
+attribute named `id` into a coordinate-pair string when the old ID is truthy;
+this is an application policy hidden in otherwise generic metadata handling.
+
+Recommendation: explicit exports; generic attributes; caller-owned metadata;
+operation-specific attribute callbacks where needed. Keep genuinely generic
+geometry utilities. `getLongestEdgeInPath` is itself domain-neutral and should
+be evaluated on correctness/usefulness rather than removed solely because #6
+lists it.
+
+### A12 — P2/features: geometric and interoperability gaps are real
+
+Source: `normalizeSegments`, intersection helpers, and examples.
+Related: [#7](https://github.com/alexbol99/spatial-graph/issues/7),
+[#14](https://github.com/alexbol99/spatial-graph/issues/14).
+
+Probe: collinear overlapping edges return no single intersection. A Multiline
+containing one segment and one arc adds just the segment without reporting the
+unsupported arc. There is no built-in planarization, proximity merging, face
+extraction, or GeoJSON adapter. The manual planarization example checks pairs
+quadratically. README descriptions of nearby-node merging exceed the automatic
+capabilities currently provided.
+
+Recommendation: reject unsupported curve shapes now; distinguish no crossing,
+point crossing, and segment overlap; implement planarization and nearby merging
+as separate features after the coordinate/mutation contracts are sound.
+
+### A13 — P2: validation coverage should grow around actual invariants
+
+Source: [`src/__tests__`](../src/__tests__),
+[`ci.yml`](../.github/workflows/ci.yml), and
+[`publish.yml`](../.github/workflows/publish.yml).
+Related: [#13](https://github.com/alexbol99/spatial-graph/issues/13).
+
+The current suite covers many examples and several important edge cases, but
+does not establish comprehensive movement-conflict, raw-import, precision,
+attribute-ownership, and topology invariants. The release workflow runs the
+four main checks but omits `check:examples`, which CI does run. CI's Node 22/24
+matrix and package checks do not establish browser execution support or every
+Node 22 patch version's ability to run TypeScript examples directly.
+
+Recommendation: targeted regression tests for findings above, then property
+tests with constrained generators and reproducible seeds; benchmark scripts;
+run `check:examples` before publishing. Preserve the distinction between library
+runtime requirements and development/example runner requirements.
+
+### A14 — P1: some angle queries use lookup coordinates instead of stored ones
+
+Source: `hasOrthogonalEdges` and `getNeighborsByLeftTurn`.
+Related: [#15](https://github.com/alexbol99/spatial-graph/issues/15).
+
+These methods find the node by its rounded key but construct direction vectors
+from the original caller coordinates. Probe: a right-angle node at `[0, 0]`
+returns `true` for `hasOrthogonalEdges([0, 0], 0)` but `false` for
+`hasOrthogonalEdges([0.49, 0.49], 0)`, despite both inputs resolving to the same
+key. The calculation describes a different center from the stored graph node.
+
+Recommendation: resolve membership once, then use stored canonical coordinates
+for all graph-element geometry. Keep arbitrary-point geometry in pure helpers.
+
+## 4. Target data model
+
+### 4.1 Geometry values and graph elements
+
+Keep lightweight tuples, but give them names that do not imply membership:
+
+```ts
+export type Point2D = readonly [x: number, y: number];
+export type Segment2D = readonly [start: Point2D, end: Point2D];
+
+export type NodeType =
+  | 'isolated'
+  | 'stub'
+  | 'intermediate'
+  | 'corner'
+  | 'junction';
+
+export interface NodeAttributes {
+  label?: string;
+  [name: string]: unknown;
+}
+
+export interface EdgeAttributes {
+  label?: string;
+  [name: string]: unknown;
+}
+```
+
+Rename `NxPoint`/`NxEdge` directly in the coordinated migration. A temporary
+consumer-local adapter can ease staging, but old aliases need not ship in 2.0.
+`NxEdge` currently represents any endpoint pair, so its successor `Segment2D`
+works for geometry unrelated to a graph.
+
+User metadata is generic (`N extends object`, `E extends object`) with the above
+defaults. Do not require every user-defined interface to declare an index
+signature. Keep mandatory internal geometry fields separate from these generic
+types. Weight is not a mandatory library attribute.
+
+### 4.2 Snapshot classes
+
+The following are proposed declaration surfaces, not implementation code or
+compiled promises. Constructors/materializers should be internal so callers
+cannot forge membership metadata or an inconsistent degree/type pair.
+
+```ts
+export declare class SpatialNode<N extends object = NodeAttributes> {
+  readonly key: string;
+  readonly point: Point2D;
+  readonly degree: number;
+  readonly type: NodeType;
+  readonly attributes: Readonly<N>;
+
+  equals(other: SpatialNode<N>): boolean;
+  distanceTo(other: SpatialNode<N>): number;
+  toFlattenPoint(): Point;
+}
+
+export declare class SpatialEdge<
+  N extends object = NodeAttributes,
+  E extends object = EdgeAttributes,
+> {
+  readonly key: string;
+  readonly source: SpatialNode<N>;
+  readonly target: SpatialNode<N>;
+  readonly endpoints: Segment2D;
+  readonly attributes: Readonly<E>;
+
+  get midpoint(): Point2D;
+  get length(): number;
+  equals(other: SpatialEdge<N, E>): boolean;
+  toFlattenSegment(): Segment;
+}
+```
+
+Node snapshots contain canonical stored coordinates, degree, classification,
+and copied top-level attributes from one graph revision. Edge endpoint snapshots
+come from that same revision. Source/target are an orientation for access, not a
+direction of travel; graph edges remain undirected.
+
+No graph pointer, dynamic topology getters, `exists` property, lifetime ID, or
+tracking of moves. A snapshot remains readable after deletion. It does not
+become a live object or throw because the graph changed. Calling `getNode(old)`
+after deletion returns `null` unless a new node occupies that coordinate key.
+
+Use fresh copied coordinate tuples and freeze their contents at runtime, not
+only `readonly` declarations. Copy and shallow-freeze attribute dictionaries.
+Nested user objects remain shared under the existing shallow-copy convention;
+do not claim a deep historical snapshot. Provide an explicit attribute-cloning
+hook if the consuming project needs nested isolation. Avoid unconditional
+`structuredClone` because arbitrary user metadata may not be cloneable.
+
+Snapshot properties cannot mutate the graph; all updates go through
+`SpatialGraph`. Do not cache snapshots across graph revisions. Internally, eager
+collection materialization should share endpoint snapshots within a single
+query to avoid repeated classification work.
+
+### 4.3 Equality and distance
+
+```ts
+// Inside SpatialNode; graph-local canonical keys are already assigned.
+equals(other: SpatialNode<N>): boolean {
+  return this.key === other.key;
+}
+
+distanceTo(other: SpatialNode<N>): number {
+  return Math.hypot(
+    this.point[0] - other.point[0],
+    this.point[1] - other.point[1],
+  );
+}
+```
+
+Equality ignores metadata, classification, and JavaScript object identity.
+Removing and recreating a node at the same canonical coordinates yields equal
+snapshots, as agreed. Different retrievals need not satisfy `a === b`.
+Cross-graph comparisons are outside this contract; no graph reference is needed
+to guard them. Geometric distance works on retained snapshots after deletion.
+It is Euclidean distance, distinct from a route's network length or cost.
+
+For undirected edges, equality compares canonical endpoint keys in either
+order, rather than potentially unstable generated Graphology edge keys. The
+public `key` identifies storage/serialization; use `equals` for geometric edge
+identity. Do not introduce a tolerance into equality: closeness is a separate
+predicate, and distance-within-tolerance is not transitive.
+
+### 4.4 Node classification
+
+| Stored degree | Classification |
+| --- | --- |
+| 0 | `isolated` |
+| 1 | `stub` |
+| 2, with opposing collinear incident directions | `intermediate` |
+| 2, with a bend | `corner` |
+| 3 or more | `junction` |
+
+Use vectors from the canonical node coordinates to its neighbors. For degree 2,
+test the deviation from 180 degrees using `atan2(abs(cross), dot)` and a dedicated
+`straightAngleToleranceDeg` option. Recommend a small default of `1e-7` degrees,
+subject to fixtures from the consuming project. Do not reuse the existing
+10-degree orthogonality tolerance for straightness. Validate finite tolerances
+in `[0, 90)`; zero permits strict floating-point comparison without slack.
+
+The original three labels do not describe isolated nodes and conflate straight
+degree-2 nodes with corners. Recommend the five labels for precise cleanup and
+rendering. If the application wants three visual categories, it can map
+`intermediate` to its chosen category and separately suppress isolated nodes.
+
+Classification is derived from topology/geometry; it is not stored in user
+attributes. The internal graph disallows self-loops and parallel edges, so
+degree and neighbor count agree for this purpose.
+
+### 4.5 Midpoint and length
+
+`edge.midpoint` is the arithmetic mean of canonical endpoints; `edge.length`
+uses `Math.hypot(dx, dy)`. Neither rounds the result to the insertion grid.
+For edge `[0, 0] -> [1, 0]`, midpoint is `[0.5, 0]` even with integer insertion
+precision. The midpoint need not have a graph node.
+
+Graph conveniences resolve membership in the current graph:
+
+```ts
+graph.getNodeType(node);      // NodeType | null
+graph.getEdgeMidpoint(edge);  // Point2D | null
+graph.getEdgeLength(edge);    // number | null
+```
+
+`node.type` and `edge.length` describe their snapshots. The graph methods
+resolve the input's key/endpoints and describe current members; they return
+`null` if absent. This difference is intentional and must be in the JSDoc.
+
+## 5. Graphology architecture and ownership
+
+### 5.1 Recommended: private Graphology graph
+
+`SpatialGraph` remains built on Graphology but no longer subclasses it. Maintain
+one internal Graphology graph with records conceptually shaped as:
+
+```ts
+interface StoredNode<N extends object> {
+  x: number;
+  y: number;
+  data: N;
+}
+
+interface StoredEdge<E extends object> {
+  data: E;
+}
+```
+
+Coordinates and edge length are library-owned; user attributes are the nested
+`data` field. Point keys are generated from canonical `x/y`, never parsed during
+routine algorithms. Length can initially be computed; if cached later, the
+mutation boundary is responsible for updating it. Require undirected, simple,
+loop-free storage. User attributes named `x`, `type`, `length`, or `id` remain
+ordinary data without silently overwriting geometry.
+
+Graphology still supplies adjacency, attributes, and compatible routing
+algorithms. Map routing cost callbacks to its internal edge records. The
+snapshot classes remain independent of Graphology. They need not extend its
+`Attributes`; internal record types satisfy that constraint structurally.
+
+Expose detached interoperability methods:
+
+- `toGraphology()` returns a new Graphology graph, with top-level `x/y` for
+  renderers, a geometric `length`, and nested `data` metadata. It is not the
+  internal mutable graph.
+- `SpatialGraph.fromGraphology(graph, options)` validates and imports a detached
+  copy; an optional attribute-mapping callback adapts existing flat dictionaries.
+- Reject directed, multi, self-loop, inconsistent-coordinate, and non-finite
+  inputs with actionable errors. Do not partially import them.
+
+Consumers running Graphology algorithms use the detached adapter or a provided
+spatial operation. The conversion costs O(V + E), so do not invoke it on every
+pointer move; core nearest/routing operations use the internal graph directly.
+If a live renderer becomes a measured requirement, design a controlled event
+adapter later rather than exposing mutable storage by default.
+
+### 5.2 Alternative: retain inheritance
+
+This preserves direct Graphology compatibility and inherited events at less
+immediate consumer migration cost. `getNode(point)` is currently an available
+name, but `addNode`, `hasNode`, `getNodeAttributes`, `mergeNodeAttributes`,
+`addEdge`, and many other names already have raw key-based contracts.
+
+If retaining inheritance, use consistent spatial names such as `addNodeAt`,
+`hasNodeAt`, `getNodeAttributesAt`, and `addEdgeBetween`. Do not silently replace
+the inherited contracts or build ambiguous point-versus-key overloads.
+
+This alternative also requires handling every inherited insertion/import/
+attribute-update method, invalid keys, loop policy, copy options, and event-based
+index invalidation. Returning immutable snapshots does not solve those bypasses.
+Because breaking changes are acceptable and the desired API is element-oriented,
+composition is the stronger long-term recommendation. Inventory the company's
+actual raw Graphology calls before implementing that change.
+
+### 5.3 Copies and subgraphs
+
+Keep familiar `copy()`, `emptyCopy()`, and `nullCopy()` spatial operations.
+Preserve precision, tolerances, graph metadata, keys, and the chosen shallow
+attribute ownership policy. `emptyCopy` keeps nodes; `nullCopy` keeps only graph
+metadata/options. Return `SpatialGraph` in every case.
+
+`getSubgraph(predicate)` should be explicitly edge-induced: copy selected edges,
+their endpoints and metadata, plus graph options/metadata. Isolated nodes are
+omitted unless requested separately. Return a new graph without shared top-level
+attribute dictionaries. Preserve issue #8's fixed behavior throughout the
+architecture change rather than treating copies as unfinished work.
+
+## 6. Coordinates, precision, and exact geometry
+
+Recommend `coordinatePrecision: number | null`, with `null` meaning preserve
+finite input coordinates. Use `null` as the proposed 2.0 default; a company
+project relying on the old integer grid must explicitly select `0`.
+
+Decimal precision quantizes insertion/lookup points using one graph-local
+normalizer. Validate an integer range (proposed `0..15`) and reject coordinates
+whose scaled normalization becomes non-finite or cannot meet the documented
+precision contract. Normalize negative zero. JavaScript doubles remain the
+numeric model; decimal precision does not guarantee exact decimal arithmetic.
+
+Use one `getNodeKey(point)` function to produce keys from canonical coordinates.
+Use the same policy for insertions, lookups, moves, import, and graph factories.
+Do not reimplement key formatting at call sites. Pure conversions and geometry
+helpers must not depend on an instance or a global constant.
+
+Separate three concepts:
+
+| Concept | Meaning | Affects equality? |
+| --- | --- | --- |
+| Coordinate precision | Optional quantization of stored nodes | Yes, through canonical keys |
+| Position tolerance | Geometric containment/nearby-node operations, in graph units | No |
+| Angle tolerance | Straightness/orthogonality, in degrees | No |
+
+Grid rounding is not distance-based clustering. Nearby-node merging is an
+explicit operation with a deterministic representative and conflict policy.
+Geometry is planar Cartesian; GeoJSON does not introduce geodesic calculations.
+
+There is a real incompatibility between strict fixed-grid coordinates and exact
+noding at every arbitrary crossing. A crossing may not lie on the configured
+grid. Do not hide this by rounding the crossing and claiming planarization.
+Under quantization, report/reject crossings that cannot be inserted while
+remaining on both edges within the positional tolerance; an explicit
+reshape/snapping operation may accept displacement. Exact-coordinate mode
+avoids that specific restriction but still requires numerical tolerances.
+
+Remove `COORDINATE_PRECISION` as global mutable policy. Conversion helpers such
+as `fromFlattenPoint` should return exact coordinate tuples. Offer explicit
+`quantizePoint(point, precision)` if callers need pure quantization.
+
+## 7. Proposed public API and migration
+
+### 7.1 Inputs, queries, and result shapes
+
+```ts
+export type NodeInput<N extends object = NodeAttributes> =
+  | Point2D
+  | SpatialNode<N>;
+
+export type EdgeInput<
+  N extends object = NodeAttributes,
+  E extends object = EdgeAttributes,
+> = Segment2D | SpatialEdge<N, E>;
+
+export interface NearestEdgeResult<
+  N extends object = NodeAttributes,
+  E extends object = EdgeAttributes,
+> {
+  readonly edge: SpatialEdge<N, E>;
+  readonly point: Point2D;
+  readonly distance: number;
+  readonly t: number;
+  readonly clamped: boolean;
+}
+
+export interface SpatialPath<
+  N extends object = NodeAttributes,
+  E extends object = EdgeAttributes,
+> {
+  readonly nodes: readonly SpatialNode<N>[];
+  readonly edges: readonly SpatialEdge<N, E>[];
+  readonly length: number;
+  readonly cost: number;
+  readonly closed: boolean;
+}
+```
+
+Primary methods accept coordinate tuples and snapshot references, not Flatten
+objects or raw string keys. A snapshot input is resolved by its canonical
+coordinates/endpoints under the current graph's policy; it does not prove that
+the element still exists. Operate only within the same graph/coordinate policy.
+Geometry-only helpers accept `Point2D`/`Segment2D`; explicit Flatten adapters
+handle integrations. Do not pass graph snapshots to helpers merely to avoid
+writing `.point` or `.endpoints`.
+
+Illustrative `SpatialGraph<N, E>` query signatures:
+
+```ts
+getNode(node: NodeInput<N>): SpatialNode<N> | null;
+getEdge(edge: EdgeInput<N, E>): SpatialEdge<N, E> | null;
+getEdgeBetween(a: NodeInput<N>, b: NodeInput<N>): SpatialEdge<N, E> | null;
+getNodes(): SpatialNode<N>[];
+getEdges(): SpatialEdge<N, E>[];
+getNodePoints(): Point2D[];
+getEdgeSegments(): Segment2D[];
+getNeighbors(node: NodeInput<N>): SpatialNode<N>[];
+getNodeType(node: NodeInput<N>): NodeType | null;
+getNodeDegree(node: NodeInput<N>): number | null;
+getEdgeMidpoint(edge: EdgeInput<N, E>): Point2D | null;
+getEdgeLength(edge: EdgeInput<N, E>): number | null;
+findNearestNode(point: Point2D): SpatialNode<N> | null;
+findNearestEdge(point: Point2D): NearestEdgeResult<N, E> | null;
+getConnectedComponents(): SpatialNode<N>[][];
+findPaths(): SpatialPath<N, E>[];
+findTerminalPaths(subset?: readonly NodeInput<N>[]): SpatialPath<N, E>[];
+getShortestPath(a: NodeInput<N>, b: NodeInput<N>, options?: PathOptions<N, E>)
+  : SpatialPath<N, E> | null;
+```
+
+Nearest results use exact coordinates and retain `t` and `clamped` semantics
+from the existing nearest-point helper. `t` is measured from the returned edge's
+source to target, with endpoints 0 and 1. An exactly perpendicular foot at an
+endpoint is not marked clamped; a foot outside the segment is clamped, subject
+to a documented numerical slack. Resolve ties by existing insertion order for
+the initial implementation and preserve that rule in indexed queries.
+
+`getNodes`, `getEdges`, neighbors, components, classifications, graph paths,
+and nearest graph members return elements. Pure projection, midpoint,
+intersection, and polyline simplification return geometry. For Flatten objects,
+offer `getFlattenPoints`, `getFlattenSegments`, and element conversion methods.
+
+### 7.2 Naming and migration table
+
+This covers the methods declared by `SpatialGraph` on the audited baseline.
+Inherited Graphology methods need a separate consumer inventory because
+composition removes their automatic availability.
+
+| Current method | Proposed replacement / disposition |
+| --- | --- |
+| Constructor `{segments, attrs, allowSelfLoops}` | `{coordinatePrecision, positionTolerance, straightAngleToleranceDeg}` plus explicit insertion; optional constructor batch uses typed edge records; remove loop allowance |
+| `addVertex(point, attrs)` | `addNode(point, attrs)`; returns a snapshot; existing node merges metadata |
+| `addSegment(segment, attrs)` | Primary `addEdge(segmentTuple, attrs)`; explicit `addFlattenSegment` adapter |
+| `addSegments(segments, attrs)` | `addEdges([{endpoints, attributes}, ...])`; explicit Flatten batch adapter; stop using parallel arrays |
+| `hasPointNode(point)` | `hasNode(node)` |
+| `getPointKey(point)` | `getNodeKey(point)` |
+| `getEdgeKeyFor(edge)` | `getEdge(edge)?.key ?? null`; optional `getEdgeKey` convenience |
+| `getEdgeBetweenPoints(a, b)` | `getEdgeBetween(a, b)`; returns `SpatialEdge` |
+| `getPointDegree(point)` | `getNodeDegree(node)`; missing returns `null`; snapshot `.degree` |
+| `getPointNeighbors(point)` | `getNeighbors(node)`; returns `SpatialNode[]` |
+| `getPointAttributes(point)` | `getNodeAttributes(node)`; missing returns `null` |
+| `mergePointAttributes(point, attrs)` | `mergeNodeAttributes(node, attrs)` only updates existing nodes; explicit `addNode` performs upsert |
+| `getEdgeAttributesFor(edge)` | `getEdgeAttributes(edge)`; missing returns `null` |
+| `mergeEdgePointAttributes(edge, attrs)` | `mergeEdgeAttributes(edge, attrs)` |
+| `removePoint`, `removePoints` | `removeNode`, `removeNodes`; snapshots or tuples accepted |
+| `removeEdge`, `removeEdges` | Keep names; snapshots or endpoint tuples accepted |
+| `removeSegment(segment)` | `removeFlattenSegment(segment)` adapter; primary `removeEdge` |
+| `getNodes`, `getEdges` | Keep names; return snapshot classes |
+| `getVertices()` | `getFlattenPoints()`; tuple extraction is `getNodePoints()` |
+| `getSegments()` | `getFlattenSegments()`; tuple extraction is `getEdgeSegments()` |
+| `getJunctions`, `getStubs` | Keep names; return `SpatialNode[]`; optional `getNodesByType(type)` |
+| `isStub(point)` | `getNodeType(node) === 'stub'`; retain `isStub(node)` only if useful in the consumer |
+| `hasOrthogonalEdges`, `getNodesWithOrthogonalEdges` | Keep names; inputs/results use nodes; canonical coordinates and validated angle tolerance |
+| `findNearestEdge(point)` | Structured exact nearest result or `null`, rather than Flatten segment/empty-graph throw |
+| `getClosestNodeToPoint(point)` | `findNearestNode(point)`; returns node or `null` |
+| `projectPointOnClosestEdge(point)` | Consolidate into `findNearestEdge(point)` result; no separate snapped tuple result |
+| `getShortestPath(start, end)` | `SpatialPath` with nodes, edges, geometric length, and cost, or `null` |
+| `getSubgraph(attrName, value)` | `getSubgraph(edgePredicate, options?)`; preserves options and metadata |
+| `getFilteredNodes(predicate)` | `getNodes().filter(predicate)` initially; optional `filterNodes(predicate)` only if allocation warrants it |
+| `moveNode`, `moveNodes` | Keep names; `NodeInput`; transactional remove/recreate semantics; return movement report |
+| `collapsePointInto(source, target)` | `mergeNodeInto(source, target)`; shared conflict policy |
+| `removeStubPoint(point)` | `removeStubNode(node)` |
+| `removeDegree2PointAndJoin(point)` | Safe `joinNode(node)`; deliberate bend/cycle changes use `collapseDegree2Node` |
+| `splitEdge(edge, point)` | Keep name; validate containment before mutation; return split report |
+| `getEdgeWeight(edge)` | Remove overloaded length meaning; `getEdgeLength` or user `attributes.weight`/cost callback |
+| `getLongestEdgeInPath(path)` | `getLongestEdge(path)` over `SpatialPath`, returning an actual edge or `null` |
+| `getPathLength(points)` | `getPathLength(nodeInputs)` returns `null` for an invalid graph path; path result `.length` preferred |
+| `calculatedMovement(path, line)` | Move to application code; retain generic projection helpers if independently useful |
+| `findPaths()` | Structured paths; preserve every-edge-once decomposition and closed cycles |
+| `findIsolatedPaths(subset)` | `findTerminalPaths(subset)`; degree measured within the induced subset |
+| `union(other)` | Keep name; validate coordinate policy, preserve metadata, return merge report |
+| Node/edge label getters/setters | Keep names with element inputs; getter `null` for missing/unlabeled; setters report missing without creating |
+| `getConnectedComponents()` | Keep name; snapshot groups, key-based head-index BFS internally |
+| `getNeighborsByLeftTurn(node, incoming)` | Keep with explicit `Vector2D` incoming direction, canonical node coordinates; not a point representing the prior node |
+| `createCompleteGraph(points, callback)` | `fromPoints(points, {connect, ...options})`; graph-local normalization; callback over canonical points |
+| `copy`, `emptyCopy`, `nullCopy` | Keep spatial copy contracts, policy/metadata preserved |
+
+Raw migration examples under composition:
+
+| Inherited usage today | Target |
+| --- | --- |
+| `graph.nodes()` / `graph.edges()` | `getNodes().map(n => n.key)` / `getEdges().map(e => e.key)` |
+| `graph.degree(key)` | `getNode(point)?.degree` or `getNodeDegree(node)` |
+| `graph.addNode(key, attrs)` | `addNode(point, attrs)` |
+| `graph.dropNode(key)` / `dropEdge(key)` | Spatial removal through coordinates/snapshots |
+| `getNodeAttributes(key)` / `getEdgeAttributes(key)` | Typed spatial attribute methods |
+| `setAttribute`, `getAttributes` | Explicit graph-metadata methods, copied dictionaries |
+| `export()` / `import()` | Validated spatial serialization described in section 10 |
+| `graph.on(...)` | Controlled spatial mutation events if actually used; otherwise reread after operation |
+| Passing `graph` into a Graphology algorithm | Built-in operation or detached `toGraphology()` |
+| `graph instanceof Graph` | No longer true; remove assumption or check the adapter |
+
+### 7.3 Missing values and errors
+
+| Situation | Contract |
+| --- | --- |
+| Node/edge lookup misses | `null` |
+| Single-value query needs a missing member | `null` |
+| Neighbor/collection query has no results | `[]` |
+| Membership predicate | `false` |
+| Removal of a missing member | `false` or a report with `changed: false` |
+| Routing missing/disconnected endpoints | `null` |
+| Routing from an existing node to itself | Valid zero-cost path with one node and no edges |
+| Nearest query on an empty graph | `null` |
+| Move from a missing source | Throw before any mutation, preserving the existing intent |
+| Non-finite coordinates, invalid options, off-edge split | Throw actionable error before mutation |
+| Duplicate/collapsed insertion | Report a normal no-op, not an invalid-input exception |
+
+Do not use zero for a missing length/degree, or an empty attribute dictionary
+for a missing member; those values can be legitimate. Every public method gets
+JSDoc covering its missing case and errors. Graph snapshots never independently
+check membership; graph operations do.
+
+### 7.4 Intended usage
+
+```ts
+const graph = new SpatialGraph({coordinatePrecision: null});
+graph.addEdge([[0, 0], [10, 0]], {label: 'link'});
+graph.addEdge([[10, 0], [10, 10]], {});
+
+const node = graph.getNode([10, 0]);
+node?.type;                         // 'corner'
+node?.distanceTo(graph.getNode([0, 0])!); // 10
+
+const edge = graph.getEdgeBetween([0, 0], [10, 0]);
+edge?.midpoint;                     // [5, 0], no node required there
+edge?.length;                       // 10
+
+if (node) {
+  graph.moveNode(node, [12, 0]);
+  node.point;                      // retained snapshot: [10, 0]
+  graph.getNode([10, 0]);           // null
+  graph.getNode([12, 0]);           // new snapshot
+}
+```
+
+## 8. Mutation contracts and metadata policy
+
+All operations go through an internal mutation planner/committer. Validate
+inputs, resolve canonical keys, collect affected records, and determine conflict
+outcomes before changing storage. Commit once; invalidate indexes/caches once;
+return a report. Operations do not expose half-applied graphs through public
+events. A bulk operation should be atomic for invalid inputs; normal insertion
+skips are recorded rather than treated as partial failure.
+
+### Insertion
+
+`addNode` returns the resulting snapshot. Adding at an existing key merges
+attributes according to the documented upsert policy. `addEdge` creates missing
+endpoints, adds a valid nonzero edge, or reports an existing/collapsed edge.
+An edge insertion report should identify `added`, `existing`, or `collapsed`,
+the edge if any, and canonical endpoints. Batch reports retain each input index
+and reason; count added/existing/collapsed inputs separately.
+
+Reject arcs and unsupported shapes in Flatten adapters before inserting any of
+the batch. Use records instead of parallel geometry/attribute arrays. For
+generic attributes with required fields, require them when creating records or
+require a configured default-attribute factory; do not pretend `{}` satisfies
+every `N`/`E` through a cast.
+
+### Moving and merging
+
+- A move to the same canonical point is a reported no-op.
+- Snapshot all source nodes and touching edges before removing anything.
+- Swaps and chains resolve against the original graph state.
+- Reject multiple different destinations for the same source; deduplicate
+  identical repeated moves.
+- Remove old source nodes; recreate destination nodes or merge into existing
+  ones. Old snapshot objects remain readable, and their keys do not change.
+- Recreate edges using moved endpoints; report self-loop collapses and duplicate
+  edges rather than silently discarding them.
+- Existing destination metadata wins conflicts by default. Where no stationary
+  destination exists, process sources in canonical key order, with the lowest
+  source key winning conflicting fields; merge nonconflicting fields.
+- Apply the same deterministic rule to duplicate edges, using canonical original
+  endpoint-pair identity. Expose conflict callbacks for application overrides.
+- Call conflict callbacks on copied inputs during planning. The order-independent
+  default does not promise independence for arbitrary stateful callbacks.
+
+`mergeNodeInto` uses that policy. `union` keeps existing destination metadata by
+default. Reject mismatched precision/policy in union unless an explicit
+renormalization option is supplied with a collision report.
+
+### Splitting
+
+Resolve the actual stored edge and validate the exact proposed point against
+its segment. Resolve the insertion policy and validate the resulting canonical
+point again. Missing edge and endpoint split are documented no-ops. Off-edge
+points throw before deleting the original edge. A report identifies the split
+node, removed edge, replacement edges, and any reuse/conflicts.
+
+Copy user metadata to both pieces by default; do not reinterpret `id`. A
+`splitAttributes` callback can assign application IDs or redistribute metadata.
+Geometric length follows the new endpoints. User fixed penalties/costs are not
+automatically additive; custom routing cost semantics must account for splitting.
+
+If replacement edges already exist, apply the shared conflict policy. Ensure
+this planning step happens before dropping the old edge. Serialization and
+undo must describe the actual committed result, not assumed new edge identities.
+
+### Joining and cleanup
+
+`joinNode` requires a straight degree-2 node, two distinct neighbors, and no
+existing neighbor-to-neighbor edge. Otherwise report a no-op with a reason.
+It preserves geometry/topology within configured tolerances. Provide a
+`joinAttributes` callback for metadata reconciliation; the default follows the
+deterministic merge policy and documents which metadata cannot be preserved.
+
+`collapseDegree2Node` may remove a bend or collapse a triangle; expose it only
+as an explicitly destructive geometric operation. Library helpers should not
+repeat the current blanket “pass-through” description for bent nodes.
+
+## 9. Algorithms, performance, and feature boundaries
+
+### Routing
+
+Return `SpatialPath` immediately for ordinary length-based shortest paths.
+Default cost is geometric edge length, computed from storage, not a mutable
+`weight` field. Add a cost callback `(edge) => number | null`; `null` closes an
+edge, finite nonnegative numbers set cost. Zero is valid. Validate all relevant
+costs before search or through an algorithm path that guarantees invalid costs
+are rejected; do not rely on undocumented behavior of Graphology's Dijkstra.
+
+Add A* only with an explicit heuristic contract: finite, nonnegative, admissible
+for optimality, and zero at the destination. For arbitrary user costs, default
+to zero heuristic. Euclidean distance is admissible for geometric-length routing
+but can overestimate a different cost model. Document whether the chosen A*
+implementation also requires consistency or supports reopening nodes. Differential
+tests compare results with Dijkstra.
+
+Proposed option shape (A* support is a follow-up, not a core-release promise):
+
+```ts
+export interface PathOptions<
+  N extends object = NodeAttributes,
+  E extends object = EdgeAttributes,
+> {
+  algorithm?: 'dijkstra' | 'astar';
+  cost?: (edge: SpatialEdge<N, E>) => number | null;
+  heuristic?: (node: SpatialNode<N>, goal: SpatialNode<N>) => number;
+}
+```
+
+Until A* is implemented, expose only supported options in shipped declarations;
+do not silently ignore a requested algorithm or heuristic. Resolve cost/heuristic
+callback views consistently for one graph revision, and avoid allowing callbacks
+to mutate the graph during routing.
+
+Path edges have undirected snapshots; `path.nodes` supplies traversal order.
+Compute `length` independently from `cost`; closed-edge behavior, no-route,
+same-node, and equal-cost tie cases must be tested. Path decomposition is not
+shortest-path routing; preserve pure cycles and every-edge-once coverage.
+
+Later, `route(fromPoint, toPoint)` virtually attaches exact projected endpoints
+without mutating the graph. Its result must include traversal geometry because
+an endpoint inside an edge is not a `SpatialNode`. Do not fabricate member-node
+snapshots or reuse `SpatialPath.nodes` to represent virtual points. Handle the
+same-edge case, source/destination projection ties, maximum snap distance, and
+endpoint attachment explicitly.
+
+Begin virtual routing with geometric-length cost. Arbitrary costs on partial
+edges need a traversal callback with edge, `fromT`, `toT`, and direction;
+proportional scaling is not valid for fixed penalties or all user costs. Define
+that contract before extending virtual routes to custom costs.
+
+### Nearest queries and indexing
+
+First implement an exact scan over internal coordinates, avoiding Flatten and
+snapshot creation for losing candidates. Store coordinates once, traverse keys
+internally, and replace BFS shifting with a head index.
+
+Benchmark cold/hot nearest queries, builds, moves, splitting, components, and
+routing on reproducible grids plus clustered/long-diagonal networks. Include
+1k, 10k, and 100k edges; report median/p95, allocations or memory where feasible,
+runtime/version/hardware, and index rebuild cost. Do not turn the historical
+issue timings into hard CI targets.
+
+Select an index based on workload: a static packed index plus lazy rebuild suits
+read-heavy graphs; a mutable index may suit editor operations. Keep candidate
+selection separate from exact nearest-on-segment evaluation. Use bounding-box
+distance lower bounds and a stopping rule, not an arbitrary nearest-N box
+heuristic that could miss the real nearest segment.
+
+Track topology/coordinate revisions separately from metadata if useful. Insert,
+remove, move, split, merge, union, import, and clear invalidate geometry indexes;
+metadata-only updates do not. Indexed and scan results must agree, including
+tie rules. Materialize the winning snapshot after the search.
+
+### Planarization and overlaps
+
+Define a geometry intersection result with discriminated `none`, `point`, and
+`overlap` cases; keep graph membership out of this pure type. Handle crossings,
+endpoint touches, T-junctions, equal segments, reversed segments, and collinear
+partial overlap. Report exact geometric points before insertion policy is applied.
+
+`planarize` collects candidate interactions, sorts split parameters for every
+original edge, and applies one batch mutation. Decompose overlaps at their
+boundaries and reconcile duplicate pieces via the shared metadata policy.
+An index reduces candidate pairs but cannot guarantee subquadratic work for
+all dense intersection outputs. Report unresolved quantization conflicts.
+
+`mergeNearbyNodes(tolerance)` needs a specified clustering model. Recommend
+connected components of the within-tolerance relation, deterministic existing
+representatives, and a report of maximum displacement. Transitive clusters can
+move members farther than the tolerance from the representative; document that
+or offer a different bounded-displacement strategy. It is not equivalent to
+decimal rounding.
+
+### Features deferred beyond the core release
+
+- GeoJSON adapters after precision and serialization stabilize; planar coordinates
+  only, without treating degree units as meters.
+- Directed/one-way graphs: require different edge identity, neighbor semantics,
+  degree classification, and traversal/cost contracts; a separate design.
+- Face extraction: distinguish graph cycles from planar faces, exterior face,
+  holes, bridges, and orientation. Left-turn sorting alone is not a face API.
+- Arc support: reject now; explicit approximation with a maximum error can be a
+  later adapter. Native curves alter geometry, indexing, and routing contracts.
+- Competitor benchmarks and an API reference can follow stable contracts.
+
+## 10. Serialization, adapters, exports, and dependencies
+
+### Serialization
+
+Provide `graph.export()` and `SpatialGraph.fromJSON(data)` with a versioned
+spatial envelope. `graph.import(data)` may remain as a validated bulk operation
+if the consumer needs it, with explicit replace/merge semantics. Store schema
+version, graph options, graph attributes, explicit node coordinates/user data,
+and edge endpoint keys/user data. Preserve edge keys where required for history
+and application references. Classes are materialized views; do not serialize
+their prototypes, degree/type caches, or graph pointers.
+
+Legacy Graphology exports need an explicit import path: strictly parse the
+entire coordinate key, validate finite values, apply an explicitly chosen legacy
+precision policy, and report key collisions. Reject incompatible topology.
+Recompute geometric length rather than trusting legacy weight. Preserve the
+original weight as user data when requested; the default router ignores it.
+Existing snapshots cannot be used to infer graph revision/history.
+
+Serialization of arbitrary JavaScript attributes is not guaranteed to be JSON
+lossless. Document JSON-compatible metadata or allow an encode/decode hook.
+Validate the complete payload before modifying a live graph. Do not execute
+user-provided serialized code or silently accept unknown future schema versions.
+
+### GeoJSON
+
+Implement `fromGeoJSON`/`toGeoJSON` as adapters, initially for LineString and
+MultiLineString features. Decide whether standalone Points are supported and
+report unsupported geometries. Feature properties belong to user metadata;
+attributes on split pieces need source-feature provenance rather than synthetic
+application IDs. Reject non-finite coordinates and explicitly handle extra
+dimensions (recommended initial behavior: reject, with an option to drop them).
+
+Graph normalization may merge duplicate features; expose the conflict report.
+Keep fine coordinates by default. Export per-edge LineStrings initially;
+merging chains with different metadata is an explicit option, not a default.
+Explain Cartesian length regardless of the source coordinate reference system.
+
+### Deliberate public exports
+
+Replace every root `export *` with an explicit list. Export the graph, snapshot
+classes, geometry values, operation/result types, and reviewed pure helpers.
+Keep internal storage, key formatting internals, numerical constants, and index
+implementation private. Use `.js` extensions under NodeNext as today.
+
+Remove built-in application metadata and `MIN_EDGE_MOVEMENT_DISTANCE`,
+`SIMPLE_SEGMENT_COORDS`, unused `IntersectionResult`, and `calculatedMovement`.
+Retain or rename generic angle/projection/simplification helpers based on actual
+use. Split constants into private implementation values and explicit options;
+classification thresholds need no global tuning if the type contract defines them.
+
+Retain the published `files` allowlist: `dist`, `README.md`, `llms.txt`, `LICENSE`.
+This design document, tests, examples, benchmarks, and demo remain repository
+artifacts. Preserve ESM/CJS and both declaration formats unless separately decided.
+
+### Dependencies and supported runtimes
+
+Issue #12 reports Graphology 0.26 as excluded by the current `^0.25.4` range.
+This audit verified the manifest range, not newer-version compatibility. Test
+both supported versions before widening it, and keep `graphology-types` aligned.
+Do not claim a version upgrade fixes invariants by itself.
+
+Under composition, keep Graphology an internal dependency initially; direct
+`instanceof Graph` compatibility is no longer part of `SpatialGraph`. Detached
+adapters need a clear contract about the dependency's Graph class identity.
+Only make Graphology a peer if actual integrations need one shared instance;
+avoid a gratuitous root re-export of its entire API. Retain Flatten as a peer
+while explicit adapters and conversions use its objects.
+
+Keep the current Node runtime support declaration for the core release unless
+tests justify changing it. Browser support requires an import/runtime smoke
+test; a neutral bundler target is insufficient evidence. Document a separate
+minimum Node version for running raw TypeScript examples. Add `check:examples`
+to release validation so it matches CI and `AGENTS.md`.
+
+## 11. Disposition of every current open issue
+
+Issue status was retrieved on 2026-10-05. No issues were edited or closed as
+part of preparing this document. “Core” identifies intended 2.0 scope;
+“follow-up” identifies features that can land after the contracts are stable.
+
+| Issue | Audit disposition | Planned work / acceptance condition |
+| --- | --- | --- |
+| [#4 — Spatial index and nearest-query speed](https://github.com/alexbol99/spatial-graph/issues/4) | Confirmed; speedup claims not remeasured | Core: direct coordinate scan and structured exact result. Follow-up: benchmark-selected index; identical scan/index answers after every mutation |
+| [#5 — Custom cost, A*, arbitrary-point routing](https://github.com/alexbol99/spatial-graph/issues/5) | Confirmed; length/weight conflation is a core problem | Core: structured paths and cost/length separation; cost callback next. Follow-up: A* contract and virtual geometric routing. Directed edges deferred |
+| [#6 — Application-specific/unused exports](https://github.com/alexbol99/spatial-graph/issues/6) | Confirmed with qualifications | Core: explicit exports, generic metadata, remove fixed movement policy and hidden ID rewrite. Retain useful generic longest-edge/projection operations with corrected contracts |
+| [#7 — Geometry gaps](https://github.com/alexbol99/spatial-graph/issues/7) | Confirmed; several independent features | Core: reject unsupported arcs, validated split, safe join, exact geometry. Follow-up: overlap result, planarize, proximity merging. Faces/native curves deferred |
+| [#9 — Off-edge split / missing weight](https://github.com/alexbol99/spatial-graph/issues/9) | Confirmed | Core: validate exact and canonical split point; `null` for missing geometric length; user weight has no automatic geometric meaning |
+| [#10 — Store coordinates / queue performance](https://github.com/alexbol99/spatial-graph/issues/10) | Confirmed | Core: canonical `x/y` in internal records, no routine parsing, head-index BFS, adapter exposes renderer coordinates |
+| [#11 — Naming cleanup](https://github.com/alexbol99/spatial-graph/issues/11) | Confirmed; deprecation staging unnecessary for current consumer | Core: migration table and snapshot classes; update AGENTS/README/llms/examples/recipes together |
+| [#12 — Dependencies / engines](https://github.com/alexbol99/spatial-graph/issues/12) | Manifest concerns verified; 0.26 compatibility not tested | Core: architecture-driven dependency decision, supported-version checks; retain engines pending runtime evidence; browser smoke test before claiming browser support |
+| [#13 — Property/performance tests](https://github.com/alexbol99/spatial-graph/issues/13) | Confirmed, baseline now 115 rather than issue's historical 112 | Core: targeted invariants and constrained property tests; follow-up benchmark suite and broad performance regression tracking |
+| [#14 — GeoJSON](https://github.com/alexbol99/spatial-graph/issues/14) | Confirmed absent | Follow-up adapter after precision/metadata/import contracts; round-trip coordinates and properties without geodesic claims |
+| [#15 — Precision / silent segment drops](https://github.com/alexbol99/spatial-graph/issues/15) | Confirmed, plus off-edge projection and malformed numeric input | Core: per-instance precision, exact default proposed, finite validation, insertion reports, exact geometry helpers |
+| [#16 — Audit roadmap](https://github.com/alexbol99/spatial-graph/issues/16) | Tracking issue; its release staging and #8 checkbox are stale | Replace patch/minor/deprecation staging with a coordinated core major plus follow-ups; track acceptance conditions rather than issue count |
+
+[Issue #8](https://github.com/alexbol99/spatial-graph/issues/8) is **closed** and
+fixed in `main` through [PR #18](https://github.com/alexbol99/spatial-graph/pull/18).
+The current copy tests pass. Its completed behavior is a regression requirement,
+not a new unresolved finding, even though issue #16 still lists it unchecked.
+
+[Open PR #17](https://github.com/alexbol99/spatial-graph/pull/17) adds an editor
+demo on a separate branch. Only its description and changed-file inventory were
+inspected here; its implementation was not audited. If merged, migrate its
+hit-testing, selection, drag, split, and history code alongside the company's
+consumer. The PR already notes the triangle/join behavior and guards against it.
+Keep display width as demo/application metadata, and keep the demo outside the
+published package. Undo/redo should serialize canonical state/options rather
+than snapshot class instances.
+
+## 12. Suggested implementation layout
+
+```text
+src/
+  SpatialGraph.ts          public facade and operation orchestration
+  SpatialNode.ts           immutable node snapshots; equality and distance
+  SpatialEdge.ts           immutable edge snapshots; midpoint and length
+  types.ts                public geometry, inputs, results, options
+  index.ts                deliberate named exports
+  internal/
+    coordinates.ts        validation, canonicalization, key production
+    storage.ts            private Graphology records and snapshot materializers
+    mutations.ts          planning/commit and deterministic conflict policy
+  algorithms/
+    classification.ts     degree/angle classification
+    traversal.ts          components and edge-covering path decomposition
+    nearest.ts            exact scan; index abstraction later
+    routing.ts            path results and costs
+  adapters/
+    flatten.ts            explicit geometry conversion/import
+    graphology.ts         detached conversion and validated import
+    serialization.ts      schema/version validation and legacy migration
+    geojson.ts            later, after adapter contracts stabilize
+  utils/
+    geometry.ts           exact geometry on tuples
+    intersection.ts       crossings/overlaps
+    projection.ts         exact nearest point and edge parameters
+```
+
+These are responsibility boundaries, not a requirement to create empty modules
+before there is code to put in them. Split the current 1,272-line class when
+extracting tested responsibilities. Algorithms work on an internal storage
+interface and share geometry helpers; they should not call public snapshot APIs
+inside tight loops. Keep a single source of truth for length/classification so
+graph convenience methods and snapshot materializers cannot drift.
+
+## 13. Implementation phases and acceptance gates
+
+### Phase 0 — Inventory the consuming project and preserve current data
+
+Deliver: actual use inventory of exports, inherited Graphology calls, coordinate
+scales, metadata types/IDs/weights, stored JSON, and any editor history/events.
+Add representative anonymized fixtures and baseline expected routes/edit outcomes.
+Check whether the editor-demo PR has merged when implementation begins.
+
+Gate: every used method has a migration destination; stored files have an
+import strategy; integer precision and geometric weight assumptions are known.
+This audit cannot complete that inventory because the consuming project was not
+provided. It is implementation preparation, not a blocker for this proposal.
+
+### Phase 1 — Establish coordinates, storage, and snapshot objects
+
+Deliver: composition facade, internal records, finite validation, per-instance
+precision, generic metadata, `SpatialNode`/`SpatialEdge`, canonical equality,
+Euclidean distance, classification, midpoint, length, basic CRUD/queries, and
+detached Graphology/Flatten adapters. Change names directly on a development
+branch; do not publish a half-migrated package.
+
+Gate: key/coordinate consistency; the proposed property-based usage works;
+retained snapshots remain readable and unchanged at the top level; public
+methods cannot bypass storage validation. Graph and snapshot calculations agree
+at retrieval time. Type declarations preserve consumer attribute types.
+
+### Phase 2 — Make graph edits predictable and preserve data
+
+Deliver: transactional batch moves, deterministic merging/conflicts, insertion
+reports, validated split, safe join, explicit bend collapse, union/copies/
+subgraphs, label/attribute operations, and versioned serialization with legacy
+import. If needed, emit controlled operation events only after commit.
+
+Gate: invalid input leaves the whole graph unchanged; swaps/chains/collisions
+have specified results; existing metadata and copy behavior survive; all probe
+regressions have tests. User IDs are never silently rewritten.
+
+### Phase 3 — Migrate traversal, nearest, and routing
+
+Deliver: key-based traversal, head-index BFS, exact nearest scan, structured
+paths, length versus cost separation, and custom costs if supported by the
+selected routing implementation. Update every example and recipe.
+
+Gate: decomposition covers each edge once, components partition nodes, nearest
+geometry agrees with a reference, and routing matches reference costs. The
+company project runs through its representative editing/routing flows.
+
+### Phase 4 — Complete the coordinated 2.0 delivery
+
+Deliver: explicit public exports, removal of application assumptions, dependency
+compatibility checks, documentation/API reference, package validation, and
+consumer migration. Update `AGENTS.md` to replace tuple-only and inheritance
+guidance with the new coordinate/element contracts. Update `README.md`,
+`llms.txt`, affected examples, and recipe tests in the same implementation change.
+
+Gate: all repository checks pass; published files remain within the existing
+allowlist; ESM/CJS declarations and consumer imports work; legacy data is migrated
+or explicitly supported; no stale public examples remain. Add the examples
+check to publishing. Release by a matching version/tag through GitHub Actions.
+
+### Phase 5 — Add measured scalability and independent features
+
+Deliver separately: benchmark suite/index, A*, virtual routing, overlap-aware
+planarization, deterministic nearby-node merging, and GeoJSON. Keep each feature
+behind its own acceptance tests and documented contract.
+
+Gate: index output agrees with scans across mutation sequences; virtual routing
+leaves export/revision unchanged; planarization reports grid incompatibility and
+has idempotence fixtures; adapter round trips retain intended metadata.
+
+No time estimate is assigned without the consumer inventory. The phases are
+dependency order, not a promise that every issue belongs in one release.
+
+## 14. Verification plan for the refactor
+
+### Targeted unit and integration tests
+
+- Coordinates: finite validation, negative zero, negative rounding boundaries,
+  exact/fractional modes, normalization overflow, key consistency, and precision
+  preservation across every copy/factory/subgraph/import path. Reject operations
+  whose derived geometry is non-finite even when each input coordinate is finite.
+- Snapshots: no owning-graph reference; fresh/frozen tuples; copied top-level
+  attributes; documented nested sharing; no mutation through returned objects;
+  readable after removal and movement; refetch updates topology/classification.
+- Equality/distance: same-key snapshots equal regardless of metadata; deletion
+  and recreation at the same coordinates equal; distinct coordinates unequal;
+  distance symmetric, zero for equal nodes, and correct for a 3–4–5 pair.
+- Classification: isolated, stub, straight intermediate, bent corner, degree-3+
+  junction, reversed neighbor order, tolerance boundary, and canonical-coordinate
+  lookup equivalence. Do not infer corner merely from degree 2.
+- Edges: reversed endpoint equality, fractional midpoint without a member node,
+  geometric length independent of user weight, missing graph conveniences return
+  null, and endpoint snapshots belong to one materialization revision.
+- Mutations: endpoint split/no edge, off-edge split, precision-displaced split,
+  replacement-edge conflicts, unchanged state after rejection, diagonal exact
+  splitting, preservation of labels/metadata, deliberate ID callback behavior.
+- Movement: swaps, chains, many-to-one collision, stationary destination, repeated
+  source entries, collapsed self-loop, duplicate rewiring, deterministic conflict
+  resolution, no-op at the same canonical coordinate, old snapshot retention.
+- Join/cleanup: straight intermediate joins, bent-node rejection, triangle
+  rejection by safe join, explicit destructive collapse, and cycle preservation.
+- Routing: missing/disconnected and same-node results, total length versus cost,
+  zero cost, excluded edges, invalid cost, multiple routes, ordered traversal,
+  and A*/Dijkstra agreement under a valid heuristic.
+- Serialization/adapters: strict legacy key parsing, invalid topology/numbers,
+  collisions, future schema versions, shallow metadata ownership, copy modes,
+  Graphology adapter independence, and unsupported Flatten arc rejection.
+
+### Property tests with constraints
+
+Use generated finite, loop-free, simple graphs. Compare canonical graph content
+rather than insertion order/generated edge keys when the property concerns
+geometry/topology. Preserve and report reproducible seeds.
+
+| Property | Required qualifications |
+| --- | --- |
+| Split then safe join restores geometry/topology | Strictly interior collinear representable point; no preexisting replacement/join edge; metadata callback policy tested separately |
+| `findPaths` covers every edge once | Count undirected canonical pairs; allow repeated terminal nodes and closed cycles |
+| Components partition nodes | Include isolated nodes; every edge's endpoints occur in the same component |
+| Simultaneous moves independent of input permutation | Valid unique sources; deterministic default conflicts; canonical comparisons; stateful custom callbacks excluded |
+| Serialization round trip | JSON-compatible metadata and supported schema; same coordinate options |
+| Equality is reflexive/symmetric/transitive | One graph and its canonical coordinate policy |
+| Nearest indexed answer matches scan | Same tie-breaking and numerical policy, including after mutations |
+| Geometric route cost equals route length | Default length cost only; custom costs intentionally differ |
+| Planarization idempotent | Supported overlap policy and representable crossings; no hidden reshape |
+
+Keep performance benchmarks separate from correctness tests. Start CI with
+operation-count/invalidation assertions and generous benchmark smoke checks;
+avoid fragile fixed wall-clock thresholds across machines. No test is needed
+merely to assert that a getter calls the chosen helper.
+
+### Required delivery checks
+
+Run `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm check:package`, and
+`pnpm check:examples`, in that dependency order where relevant. Add ESM/CJS
+type-consumer fixtures for generic node/edge classes and a browser smoke test
+if browser support is promised. Run the consuming project's checks separately;
+library tests cannot prove its migration is complete.
+
+## 15. Decisions and risks to carry into implementation
+
+| Decision | Recommendation | Consequence / remaining evidence |
+| --- | --- | --- |
+| Snapshot versus live object | Snapshot, no graph reference | `node.type` becomes stale after edits; fetch again; nested metadata sharing documented |
+| Node identity | Canonical coordinates within one graph | Recreation at the same position compares equal; no temporal or cross-graph identity |
+| Graphology inheritance | Replace with composition | Raw methods/events/instance checks need consumer migration; adapters cost O(V+E) |
+| Default precision | Exact finite coordinates (`null`) in 2.0 | Existing consumer must choose `0` to retain grid identity; floating-point closeness still explicit |
+| Classification | Five labels; corner means a bend | Consumer switch statements need exhaustive update; validate angle tolerance on real fixtures |
+| Missing graph values | `null` for scalar/object queries | Callers must handle null instead of zero/empty dictionaries/nearest exceptions |
+| Length/cost | Derived length; callback-defined cost | Legacy user weight no longer overwritten; custom cost after splitting needs explicit semantics |
+| Metadata ownership | Copy/shallow-freeze top level | Nested mutable objects remain shared unless a clone hook is configured |
+| Conflict resolution | Existing destination wins; canonical ordering otherwise | Changes input-order-dependent outcomes; verify intended company merge behavior |
+| Split/join | Geometrically safe by default | Existing editor shortcuts may need explicit reshape/collapse operations |
+| Unsupported curves | Reject with actionable error | Data that previously lost arcs silently now fails visibly |
+
+These recommendations are concrete enough to implement and review. The highest
+remaining risk is migrating actual consumer assumptions, especially raw
+Graphology access, integer-grid identity, nested metadata, editor history, and
+user IDs. Address those through Phase 0 fixtures, rather than adding implicit
+graph references or preserving inconsistent legacy contracts in the new classes.
+
+## Appendix A. Reproducing the main correctness probes
+
+Run on the audited 1.0.1 baseline after `pnpm build`, from the repository root.
+This script intentionally confirms current behavior, including undesired
+behavior; it is not the expected test suite for the refactor.
+
+```sh
+node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import {SpatialGraph, nearestPointOnSegment, findIntersection} from './dist/index.js';
+import {Point, Segment} from '@flatten-js/core';
+
+const line = (a, b) => new Segment(new Point(...a), new Point(...b));
+
+const raw = new SpatialGraph();
+raw.addNode('label');
+raw.addNode('1junk,2');
+assert.equal(raw.order, 2);
+assert.deepEqual(raw.getNodes(), [[1, 2]]);
+
+const invalid = new SpatialGraph();
+invalid.addVertex([Infinity, 0]);
+invalid.addVertex([NaN, 0]);
+assert.equal(invalid.order, 2);
+assert.deepEqual(invalid.getNodes(), [[Infinity, 0]]);
+
+const snapped = new SpatialGraph({segments: [line([0, 0], [3, 1])]});
+const [point, edge] = snapped.projectPointOnClosestEdge([1, 1]);
+assert.deepEqual(point, [1, 0]);
+assert.equal(line(...edge).contains(new Point(...point)), false);
+const exact = nearestPointOnSegment([1, 1], edge).point;
+assert.ok(Math.abs(exact[0] - 1.2) < 1e-10);
+assert.ok(Math.abs(exact[1] - 0.4) < 1e-10);
+
+const weighted = new SpatialGraph({segments: [line([0, 0], [10, 0])]});
+weighted.getEdgeAttributesFor([[0, 0], [10, 0]]).weight = -5;
+assert.equal(weighted.getPathLength([[0, 0], [10, 0]]), -5);
+
+const split = new SpatialGraph({segments: [line([0, 0], [10, 0])]});
+split.splitEdge([[0, 0], [10, 0]], [5, 50]);
+assert.equal(split.size, 2);
+assert.ok(split.hasPointNode([5, 50]));
+
+const move = (reverse) => {
+  const g = new SpatialGraph();
+  g.addVertex([0, 0], {value: 'a'});
+  g.addVertex([10, 0], {value: 'b'});
+  const moves = [[[0, 0], [20, 0]], [[10, 0], [20, 0]]];
+  g.moveNodes(reverse ? moves.reverse() : moves);
+  return g.getPointAttributes([20, 0]).value;
+};
+assert.equal(move(false), 'a');
+assert.equal(move(true), 'b');
+
+const angle = new SpatialGraph({segments: [
+  line([0, 0], [10, 0]), line([0, 0], [0, 10]),
+]});
+assert.equal(angle.getPointKey([0, 0]), angle.getPointKey([0.49, 0.49]));
+assert.equal(angle.hasOrthogonalEdges([0, 0], 0), true);
+assert.equal(angle.hasOrthogonalEdges([0.49, 0.49], 0), false);
+
+assert.equal(findIntersection([[0, 0], [10, 0]], [[5, 0], [15, 0]]), null);
+console.log('Audited baseline behavior reproduced.');
+JS
+```
