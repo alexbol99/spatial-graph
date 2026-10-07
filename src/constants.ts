@@ -24,11 +24,6 @@ export const JUNCTION_MIN_DEGREE = 2;
 export const STUB_DEGREE = 1;
 
 /**
- * Number of coordinates in a simple segment (start and end points)
- */
-export const SIMPLE_SEGMENT_COORDS = 2;
-
-/**
  * Precision for coordinate rounding (number of decimal places)
  */
 export const COORDINATE_PRECISION = 0;

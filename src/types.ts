@@ -1,4 +1,4 @@
-import type { Point, Segment, Multiline } from '@flatten-js/core';
+import type { Multiline, Segment } from '@flatten-js/core';
 
 /**
  * Represents a 2D point as a readonly tuple [x, y]
@@ -15,8 +15,6 @@ export type NxEdge = readonly [NxPoint, NxPoint];
  */
 export type EdgeAttributes = {
   weight: number;
-  width?: number;
-  clearanceWidth?: number;
   [key: string]: unknown;
 };
 
@@ -24,8 +22,6 @@ export type EdgeAttributes = {
  * Node attributes stored in the graph
  */
 export type NodeAttributes = {
-  radius?: number;
-  closestGeoms?: NxEdge[];
   [key: string]: unknown;
 };
 
@@ -40,15 +36,6 @@ export type FilterPredicate = (node: NxPoint, attrs: NodeAttributes) => boolean;
 export type IsValidCallback = (start: NxPoint, end: NxPoint) => boolean;
 
 /**
- * Result type for intersection operations
- */
-export type IntersectionResult = {
-  point: NxPoint;
-  edge1: NxEdge;
-  edge2: NxEdge;
-} | null;
-
-/**
  * Constructor options for SpatialGraph
  */
 export type SpatialGraphOptions = {
@@ -57,8 +44,3 @@ export type SpatialGraphOptions = {
   segments?: Array<Segment | Multiline>;
   attrs?: Array<Record<string, unknown>>;
 };
-
-/**
- * Re-export flatten-js types for convenience
- */
-export type { Point, Segment, Multiline };
