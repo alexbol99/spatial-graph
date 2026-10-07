@@ -80,8 +80,9 @@ if (!a || !b) throw new Error('Need two edges to find a crossing.');
 
 const toSegment = ([start, end]: NxEdge) =>
   new Segment(new Point(...start), new Point(...end));
-const [intersection] = toSegment(a).intersect(toSegment(b));
-if (intersection instanceof Point) {
+const intersections = toSegment(a).intersect(toSegment(b));
+if (intersections.length === 1 && intersections[0] instanceof Point) {
+  const [intersection] = intersections;
   const crossing: NxPoint = [intersection.x, intersection.y];
   graph.splitEdge(a, crossing);
   graph.splitEdge(b, crossing);

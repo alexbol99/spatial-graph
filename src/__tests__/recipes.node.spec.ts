@@ -62,9 +62,11 @@ describe('documented recipes', () => {
     if (!a || !b) throw new Error('The graph must have two edges.');
     const toSegment = ([start, end]: NxEdge) =>
       new Segment(new Point(...start), new Point(...end));
-    const [intersection] = toSegment(a).intersect(toSegment(b));
+    const intersections = toSegment(a).intersect(toSegment(b));
     const crossing: NxPoint | null =
-      intersection instanceof Point ? [intersection.x, intersection.y] : null;
+      intersections.length === 1 && intersections[0] instanceof Point
+        ? [intersections[0].x, intersections[0].y]
+        : null;
     if (crossing) {
       graph.splitEdge(a, crossing);
       graph.splitEdge(b, crossing);
@@ -73,6 +75,12 @@ describe('documented recipes', () => {
     expect(crossing).toEqual([5, 5]);
     expect(graph.getJunctions()).toEqual([[5, 5]]);
     expect(graph.size).toBe(4);
+
+    const overlap = toSegment([[0, 0], [10, 0]]).intersect(
+      toSegment([[5, 0], [15, 0]]),
+    );
+    expect(overlap).toHaveLength(2);
+    expect(overlap.length === 1 ? overlap[0] : null).toBeNull();
   });
 
   it('clean up a network', () => {

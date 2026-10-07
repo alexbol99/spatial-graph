@@ -60,8 +60,9 @@ Split two crossing edges at their intersection with `@flatten-js/core`:
 ```ts
 const toSegment = ([start, end]: NxEdge) =>
   new Segment(new Point(...start), new Point(...end));
-const [intersection] = toSegment(edgeA).intersect(toSegment(edgeB));
-if (intersection instanceof Point) {
+const intersections = toSegment(edgeA).intersect(toSegment(edgeB));
+if (intersections.length === 1 && intersections[0] instanceof Point) {
+  const [intersection] = intersections;
   const crossing: NxPoint = [intersection.x, intersection.y];
   graph.splitEdge(edgeA, crossing);
   graph.splitEdge(edgeB, crossing);

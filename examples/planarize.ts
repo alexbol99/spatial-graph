@@ -12,7 +12,10 @@ const toSegment = ([start, end]: NxEdge) =>
   new Segment(new Point(...start), new Point(...end));
 
 const findCrossing = (first: NxEdge, second: NxEdge): NxPoint | null => {
-  const [intersection] = toSegment(first).intersect(toSegment(second));
+  const intersections = toSegment(first).intersect(toSegment(second));
+  if (intersections.length !== 1) return null;
+
+  const [intersection] = intersections;
   return intersection instanceof Point ? [intersection.x, intersection.y] : null;
 };
 
