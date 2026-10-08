@@ -1,0 +1,315 @@
+{
+  "attributes": {
+    "nextNodeLabelIndex": 13,
+    "nextEdgeLabelIndex": 12
+  },
+  "nodes": [
+    {
+      "key": "0,0",
+      "attributes": {
+        "x": 0,
+        "y": 0,
+        "label": "n1"
+      }
+    },
+    {
+      "key": "400,0",
+      "attributes": {
+        "x": 400,
+        "y": 0,
+        "label": "n2"
+      }
+    },
+    {
+      "key": "900,0",
+      "attributes": {
+        "x": 900,
+        "y": 0,
+        "label": "n3"
+      }
+    },
+    {
+      "key": "900,250",
+      "attributes": {
+        "x": 900,
+        "y": 250,
+        "label": "n4"
+      }
+    },
+    {
+      "key": "900,500",
+      "attributes": {
+        "x": 900,
+        "y": 500,
+        "label": "n5"
+      }
+    },
+    {
+      "key": "900,1000",
+      "attributes": {
+        "x": 900,
+        "y": 1000,
+        "label": "n6"
+      }
+    },
+    {
+      "key": "1400,500",
+      "attributes": {
+        "x": 1400,
+        "y": 500,
+        "label": "n7"
+      }
+    },
+    {
+      "key": "1400,1000",
+      "attributes": {
+        "x": 1400,
+        "y": 1000,
+        "label": "n8"
+      }
+    },
+    {
+      "key": "400,600",
+      "attributes": {
+        "x": 400,
+        "y": 600,
+        "label": "n9"
+      }
+    },
+    {
+      "key": "700,900",
+      "attributes": {
+        "x": 700,
+        "y": 900,
+        "label": "n10"
+      }
+    },
+    {
+      "key": "2000,0",
+      "attributes": {
+        "x": 2000,
+        "y": 0,
+        "label": "n11"
+      }
+    },
+    {
+      "key": "2400,0",
+      "attributes": {
+        "x": 2400,
+        "y": 0,
+        "label": "n12"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "key": "b0#0",
+      "source": "0,0",
+      "target": "400,0",
+      "attributes": {
+        "coords": [
+          [
+            0,
+            0
+          ],
+          [
+            400,
+            0
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b1"
+      }
+    },
+    {
+      "key": "b1#0",
+      "source": "400,0",
+      "target": "900,0",
+      "attributes": {
+        "coords": [
+          [
+            400,
+            0
+          ],
+          [
+            900,
+            0
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b2"
+      }
+    },
+    {
+      "key": "b2#0",
+      "source": "900,0",
+      "target": "900,250",
+      "attributes": {
+        "coords": [
+          [
+            900,
+            0
+          ],
+          [
+            900,
+            250
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b3"
+      }
+    },
+    {
+      "key": "b3#0",
+      "source": "900,250",
+      "target": "900,500",
+      "attributes": {
+        "coords": [
+          [
+            900,
+            250
+          ],
+          [
+            900,
+            500
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b4"
+      }
+    },
+    {
+      "key": "b4#0",
+      "source": "900,500",
+      "target": "900,1000",
+      "attributes": {
+        "coords": [
+          [
+            900,
+            500
+          ],
+          [
+            900,
+            1000
+          ]
+        ],
+        "corridor_width": 200,
+        "label": "b5"
+      }
+    },
+    {
+      "key": "b5#0",
+      "source": "900,500",
+      "target": "1400,500",
+      "attributes": {
+        "coords": [
+          [
+            900,
+            500
+          ],
+          [
+            1400,
+            500
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b6"
+      }
+    },
+    {
+      "key": "b6#0",
+      "source": "1400,500",
+      "target": "1400,1000",
+      "attributes": {
+        "coords": [
+          [
+            1400,
+            500
+          ],
+          [
+            1400,
+            1000
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b7"
+      }
+    },
+    {
+      "key": "b7#0",
+      "source": "1400,1000",
+      "target": "900,1000",
+      "attributes": {
+        "coords": [
+          [
+            1400,
+            1000
+          ],
+          [
+            900,
+            1000
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b8"
+      }
+    },
+    {
+      "key": "b8#0",
+      "source": "400,0",
+      "target": "400,600",
+      "attributes": {
+        "coords": [
+          [
+            400,
+            0
+          ],
+          [
+            400,
+            600
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b9"
+      }
+    },
+    {
+      "key": "b9#0",
+      "source": "400,600",
+      "target": "700,900",
+      "attributes": {
+        "coords": [
+          [
+            400,
+            600
+          ],
+          [
+            700,
+            900
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b10"
+      }
+    },
+    {
+      "key": "b10#0",
+      "source": "2000,0",
+      "target": "2400,0",
+      "attributes": {
+        "coords": [
+          [
+            2000,
+            0
+          ],
+          [
+            2400,
+            0
+          ]
+        ],
+        "corridor_width": 140,
+        "label": "b11"
+      }
+    }
+  ]
+}

@@ -1187,6 +1187,10 @@ import strategy; integer precision and geometric weight assumptions are known.
 This audit cannot complete that inventory because the consuming project was not
 provided. It is implementation preparation, not a blocker for this proposal.
 
+Status 2026-10-08: done for what the code can answer; see
+[consumer-inventory.md](consumer-inventory.md) for the inventory, migration
+destinations, baseline fixtures/tests and the open items that need data or a decision.
+
 ### Phase 1 — Establish coordinates, storage, and snapshot objects
 
 Deliver: composition facade, internal records, finite validation, per-instance
