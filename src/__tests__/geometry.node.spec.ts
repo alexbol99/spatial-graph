@@ -6,13 +6,9 @@ import {
   fromFlattenPoint,
   toFlattenSegment,
   fromFlattenSegment,
-  getPointDistance,
   getLinesAngleByCross,
-  getLinesDot,
   hasValidLength,
   pointsEqual,
-  edgesEqual,
-  simplifyPolylinePath,
 } from '../utils/geometry.js';
 import type { NxPoint, NxEdge } from '../types.js';
 
@@ -90,12 +86,6 @@ describe('geometry utilities', () => {
     });
   });
 
-  describe('getPointDistance', () => {
-    it('should return Euclidean distance between points', () => {
-      expect(getPointDistance([0, 0], [3, 4])).toBe(5);
-    });
-  });
-
   describe('getLinesAngleByCross', () => {
     it('should calculate 90 degree angle for perpendicular lines', () => {
       const seg1 = new Segment(new Point(0, 0), new Point(1, 0)); // horizontal
@@ -122,27 +112,6 @@ describe('geometry utilities', () => {
       const angle = getLinesAngleByCross(seg1, seg2);
 
       expect(angle).toBeCloseTo(45, 1);
-    });
-  });
-
-  describe('getLinesDot', () => {
-    it('should calculate dot product of segments', () => {
-      const seg1 = new Segment(new Point(0, 0), new Point(1, 0));
-      const seg2 = new Segment(new Point(0, 0), new Point(0, 1));
-
-      const dot = getLinesDot(seg1, seg2);
-
-      // Perpendicular vectors have dot product of 0
-      expect(dot).toBeCloseTo(0, 5);
-    });
-
-    it('should calculate positive dot for same direction', () => {
-      const seg1 = new Segment(new Point(0, 0), new Point(1, 0));
-      const seg2 = new Segment(new Point(0, 0), new Point(2, 0));
-
-      const dot = getLinesDot(seg1, seg2);
-
-      expect(dot).toBeGreaterThan(0);
     });
   });
 
@@ -179,70 +148,4 @@ describe('geometry utilities', () => {
     });
   });
 
-  describe('edgesEqual', () => {
-    it('should return true for equal edges', () => {
-      const e1: NxEdge = [
-        [0, 0],
-        [1, 1],
-      ];
-      const e2: NxEdge = [
-        [0, 0],
-        [1, 1],
-      ];
-      expect(edgesEqual(e1, e2)).toBe(true);
-    });
-
-    it('should return true for reversed edges', () => {
-      const e1: NxEdge = [
-        [0, 0],
-        [1, 1],
-      ];
-      const e2: NxEdge = [
-        [1, 1],
-        [0, 0],
-      ];
-      expect(edgesEqual(e1, e2)).toBe(true);
-    });
-
-    it('should return false for different edges', () => {
-      const e1: NxEdge = [
-        [0, 0],
-        [1, 1],
-      ];
-      const e2: NxEdge = [
-        [0, 0],
-        [2, 2],
-      ];
-      expect(edgesEqual(e1, e2)).toBe(false);
-    });
-  });
-
-  describe('simplifyPolylinePath', () => {
-    it('should remove points within the RDP tolerance', () => {
-      const path: NxPoint[] = [
-        [0, 0],
-        [50, 2],
-        [100, 0],
-      ];
-
-      expect(simplifyPolylinePath(path, 8)).toEqual([
-        [0, 0],
-        [100, 0],
-      ]);
-    });
-
-    it('should keep points outside the RDP tolerance', () => {
-      const path: NxPoint[] = [
-        [0, 0],
-        [50, 20],
-        [100, 0],
-      ];
-
-      expect(simplifyPolylinePath(path, 8)).toEqual([
-        [0, 0],
-        [50, 20],
-        [100, 0],
-      ]);
-    });
-  });
 });

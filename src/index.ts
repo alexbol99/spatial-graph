@@ -1,6 +1,10 @@
 export { SpatialGraph } from './SpatialGraph.js';
-export * from './types.js';
-export * from './constants.js';
-export * from './utils/geometry.js';
-export * from './utils/intersection.js';
-export * from './utils/projection.js';
+export type {
+  EdgeAttributes,
+  FilterPredicate,
+  IsValidCallback,
+  NodeAttributes,
+  NxEdge,
+  NxPoint,
+  SpatialGraphOptions,
+} from './types.js';

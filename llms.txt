@@ -12,7 +12,7 @@ npm install @flatten-js/spatial-graph @flatten-js/core
 
 ```ts
 import { Point, Segment } from '@flatten-js/core';
-import { SpatialGraph } from '@flatten-js/spatial-graph';
+import { SpatialGraph, type NxEdge, type NxPoint } from '@flatten-js/spatial-graph';
 
 const graph = new SpatialGraph({
   segments: [
@@ -29,7 +29,7 @@ graph.getJunctions();                    // NxPoint[] (degree > 2)
 ## Rules that prevent most mistakes
 
 - Points are `NxPoint = readonly [x, y]`. Edges are `NxEdge = readonly [NxPoint, NxPoint]`. flatten-js `Point`/`Segment` are accepted where a method says so and returned by `getSegments`, `getVertices`, `getShortestPath`, `findNearestEdge`.
-- Coordinates are rounded to `COORDINATE_PRECISION` decimals (default 0, whole numbers) to form node keys. Points that round to the same key are one node. If your data uses small units, scale it up before building the graph.
+- Coordinates are rounded to whole numbers to form node keys. Points that round to the same key are one node. If your data uses small units, scale it up before building the graph.
 - The graph is undirected and simple: no parallel edges. Point-based segment methods silently skip self-loops, including zero-length segments and endpoints that round to the same node. Raw graphology methods allow self-loops by default; use constructor option `allowSelfLoops: false` to disallow them.
 - Edge attribute `weight` is the segment length and is set automatically. Shortest paths use it.
 - Queries on a point that is not a node return an empty value (`[]`, `null`, `{}`, `0`, `false`); they do not throw. These throw: `findNearestEdge`, `projectPointOnClosestEdge` (no edges), `getClosestNodeToPoint` (no nodes), `moveNode`/`moveNodes` (missing node).
@@ -43,7 +43,7 @@ graph.getJunctions();                    // NxPoint[] (degree > 2)
 - Nearest and routes: `findNearestEdge`, `getClosestNodeToPoint`, `projectPointOnClosestEdge`, `getShortestPath(start, end)`, `findPaths()`, `findIsolatedPaths(subset?)`, `getPathLength(nodes)`
 - Edit: `moveNode`, `moveNodes`, `collapsePointInto`, `removeStubPoint`, `removeDegree2PointAndJoin`, `removeEdge(s)`, `removePoint(s)`, `removeSegment`
 - Attributes: `getPointAttributes`, `mergePointAttributes`, `getEdgeAttributesFor`, `mergeEdgePointAttributes`, `getNodeLabel`/`setNodeLabel`, `getEdgeLabel`/`setEdgeLabel`
-- Geometry helpers (package root): `findIntersection`, `findLineIntersection`, `isPointOnSegment`, `projectPointOnSegment`, `nearestPointOnSegment`, `pointsEqual`, `getPointDistance`, `simplifyPolylinePath`
+- Package exports: the `SpatialGraph` class and this package's own types. Use `@flatten-js/core` directly for geometry operations.
 
 ## Recipes
 
@@ -55,11 +55,15 @@ graph.splitEdge(edge, snapped);
 graph.addSegment(new Segment(new Point(4, 3), new Point(...snapped)));
 ```
 
-Split two crossing edges at the crossing:
+Split two crossing edges at their intersection with `@flatten-js/core`:
 
 ```ts
-const crossing = findIntersection(edgeA, edgeB); // null if they do not cross
-if (crossing) {
+const toSegment = ([start, end]: NxEdge) =>
+  new Segment(new Point(...start), new Point(...end));
+const intersections = toSegment(edgeA).intersect(toSegment(edgeB));
+if (intersections.length === 1 && intersections[0] instanceof Point) {
+  const [intersection] = intersections;
+  const crossing: NxPoint = [intersection.x, intersection.y];
   graph.splitEdge(edgeA, crossing);
   graph.splitEdge(edgeB, crossing);
 }

@@ -13,12 +13,10 @@ confirming local `main` and `origin/main` matched.
 Current upstream status: [`v1.1.0`](https://github.com/alexbol99/spatial-graph/releases/tag/v1.1.0)
 was released on 2026-10-09 from `main` after
 [PR #19](https://github.com/alexbol99/spatial-graph/pull/19) removed redundant
-public exports. The audit branch still contains the 1.0.1 implementation plus
+public exports. This branch has now merged that 1.1.0 `main` commit and retains
 the [Phase 0 consumer inventory](consumer-inventory.md), fixtures, and baseline
 tests. Sections 2–3 and Appendix A record the original 1.0.1 audit; current
-status and remaining work are called out where they affect the plan. Synchronize
-with current `main` before implementing Phase 1. This update changes only the
-audit document on its existing branch.
+status and remaining work are called out where they affect the plan.
 
 ### Contents
 
@@ -1421,7 +1419,7 @@ precision default, and detailed mutation result shapes remain proposals.
 
 ## Appendix A. Reproducing the main correctness probes
 
-Run on the audited 1.0.1 source or the original audit branch after `pnpm build`,
+Run on the audited `v1.0.1` tag or commit `6aefd1f` after `pnpm build`,
 from that checkout's repository root. Do not run this old probe unchanged against
 1.1.0: `nearestPointOnSegment` and `findIntersection` are no longer root exports.
 This script intentionally confirms the old behavior, including undesired

@@ -394,7 +394,7 @@ describe('SpatialGraph', () => {
     it('should split an edge', () => {
       const graph = new SpatialGraph();
       graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)), {
-        width: 120,
+        customValue: 'original',
         label: 'corridor',
       });
 
@@ -422,7 +422,7 @@ describe('SpatialGraph', () => {
           [5, 0],
         ]),
       ).toMatchObject({
-        width: 120,
+        customValue: 'original',
         label: 'corridor',
         weight: 5,
       });
@@ -432,7 +432,7 @@ describe('SpatialGraph', () => {
           [10, 0],
         ]),
       ).toMatchObject({
-        width: 120,
+        customValue: 'original',
         label: 'corridor',
         weight: 5,
       });
@@ -443,7 +443,7 @@ describe('SpatialGraph', () => {
       graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)), {
         id: '0,0|10,0',
         label: 'corridor',
-        width: 120,
+        customValue: 'original',
       });
 
       graph.splitEdge(
@@ -462,7 +462,7 @@ describe('SpatialGraph', () => {
       ).toMatchObject({
         id: '0,0|5,0',
         label: 'corridor',
-        width: 120,
+        customValue: 'original',
       });
       expect(
         graph.getEdgeAttributesFor([
@@ -472,7 +472,7 @@ describe('SpatialGraph', () => {
       ).toMatchObject({
         id: '10,0|5,0',
         label: 'corridor',
-        width: 120,
+        customValue: 'original',
       });
     });
 
@@ -505,7 +505,7 @@ describe('SpatialGraph', () => {
       graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)), { label: 'collapsed' });
       graph.addSegment(new Segment(new Point(0, 0), new Point(-10, 0)), {
         label: 'rewired',
-        width: 90,
+        customValue: 'rewired',
       });
 
       graph.collapsePointInto([0, 0], [10, 0]);
@@ -525,7 +525,7 @@ describe('SpatialGraph', () => {
         ]),
       ).toMatchObject({
         label: 'rewired',
-        width: 90,
+        customValue: 'rewired',
         weight: 20,
       });
     });
@@ -534,11 +534,11 @@ describe('SpatialGraph', () => {
       const graph = new SpatialGraph();
       graph.addSegment(new Segment(new Point(0, 0), new Point(0, 10)), {
         label: 'moved',
-        width: 80,
+        customValue: 'moved',
       });
       graph.addSegment(new Segment(new Point(10, 0), new Point(0, 10)), {
         label: 'existing',
-        clearanceWidth: 140,
+        existingValue: 'existing',
       });
 
       graph.collapsePointInto([0, 0], [10, 0]);
@@ -550,8 +550,8 @@ describe('SpatialGraph', () => {
         ]),
       ).toMatchObject({
         label: 'existing',
-        width: 80,
-        clearanceWidth: 140,
+        customValue: 'moved',
+        existingValue: 'existing',
       });
       expect(graph.size).toBe(1);
     });
@@ -580,10 +580,10 @@ describe('SpatialGraph', () => {
 
     it('should remove a degree-2 point and join its neighbors', () => {
       const graph = new SpatialGraph();
-      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)), { width: 100 });
-      graph.addSegment(new Segment(new Point(10, 0), new Point(10, 10)), { width: 140 });
+      graph.addSegment(new Segment(new Point(0, 0), new Point(10, 0)), { customValue: 'first' });
+      graph.addSegment(new Segment(new Point(10, 0), new Point(10, 10)), { customValue: 'second' });
 
-      graph.removeDegree2PointAndJoin([10, 0], { width: 160, label: 'joined' });
+      graph.removeDegree2PointAndJoin([10, 0], { customValue: 'joined', label: 'joined' });
 
       expect(graph.hasPointNode([10, 0])).toBe(false);
       expect(graph.getEdgeBetweenPoints([0, 0], [10, 10])).toEqual([
@@ -596,7 +596,7 @@ describe('SpatialGraph', () => {
           [10, 10],
         ]),
       ).toMatchObject({
-        width: 160,
+        customValue: 'joined',
         label: 'joined',
       });
     });
@@ -669,6 +669,34 @@ describe('SpatialGraph', () => {
       const path = graph.getShortestPath([0, 0], [5, 5]);
 
       expect(path.length).toBe(0);
+    });
+  });
+
+  describe('path helpers', () => {
+    it('returns the heaviest edge in a path', () => {
+      const graph = new SpatialGraph({
+        segments: [
+          new Segment(new Point(0, 0), new Point(10, 0)),
+          new Segment(new Point(10, 0), new Point(30, 0)),
+        ],
+      });
+
+      expect(graph.getLongestEdgeInPath([[0, 0], [10, 0], [30, 0]])).toEqual([
+        [10, 0],
+        [30, 0],
+      ]);
+      expect(graph.getLongestEdgeInPath([[0, 0]])).toBeNull();
+    });
+
+    it('calculates moves that project a path onto a line', () => {
+      const graph = new SpatialGraph();
+      const line = new Segment(new Point(0, 0), new Point(20, 0));
+
+      expect(graph.calculatedMovement([[0, 5], [10, 5], [20, 5]], line)).toEqual([
+        [[0, 5], [0, 0]],
+        [[10, 5], [10, 0]],
+        [[20, 5], [20, 0]],
+      ]);
     });
   });
 

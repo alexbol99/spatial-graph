@@ -2,11 +2,22 @@
 // crossing, so that routes can switch lines where the lines meet.
 import assert from 'node:assert/strict';
 import { Point, Segment } from '@flatten-js/core';
-import { SpatialGraph, findIntersection, getPointDistance } from '@flatten-js/spatial-graph';
+import { SpatialGraph } from '@flatten-js/spatial-graph';
 import type { NxEdge, NxPoint } from '@flatten-js/spatial-graph';
 
 const line = (x1: number, y1: number, x2: number, y2: number) =>
   new Segment(new Point(x1, y1), new Point(x2, y2));
+
+const toSegment = ([start, end]: NxEdge) =>
+  new Segment(new Point(...start), new Point(...end));
+
+const findCrossing = (first: NxEdge, second: NxEdge): NxPoint | null => {
+  const intersections = toSegment(first).intersect(toSegment(second));
+  if (intersections.length !== 1) return null;
+
+  const [intersection] = intersections;
+  return intersection instanceof Point ? [intersection.x, intersection.y] : null;
+};
 
 const graph = new SpatialGraph({
   segments: [line(0, 0, 10, 10), line(0, 10, 10, 0), line(0, 2, 10, 2)],
@@ -18,7 +29,7 @@ const edges = graph.getEdges();
 const crossings = new Map<NxEdge, NxPoint[]>(edges.map((edge) => [edge, []]));
 for (const [i, a] of edges.entries()) {
   for (const b of edges.slice(i + 1)) {
-    const point = findIntersection(a, b); // null when they do not cross
+    const point = findCrossing(a, b); // null when they do not cross
     if (point) {
       crossings.get(a)!.push(point);
       crossings.get(b)!.push(point);
@@ -28,7 +39,11 @@ for (const [i, a] of edges.entries()) {
 
 for (const [edge, points] of crossings) {
   // Split from one end to the other so each split acts on the remaining piece.
-  points.sort((p, q) => getPointDistance(edge[0], p) - getPointDistance(edge[0], q));
+  points.sort(
+    (p, q) =>
+      Math.hypot(edge[0][0] - p[0], edge[0][1] - p[1]) -
+      Math.hypot(edge[0][0] - q[0], edge[0][1] - q[1]),
+  );
   let rest: NxEdge = edge;
   for (const point of points) {
     graph.splitEdge(rest, point);
