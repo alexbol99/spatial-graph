@@ -1,6 +1,6 @@
 {
   "name": "@flatten-js/spatial-graph",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Build, query and clean 2D line networks: points as nodes, segments as edges. Shortest paths, nearest-edge snapping, edge splitting, merging and network analysis, on graphology and @flatten-js/core.",
   "keywords": [
     "graph",

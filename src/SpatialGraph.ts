@@ -45,9 +45,8 @@ const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttr
  * for you.
  *
  * @remarks
- * - Nodes are keyed by their coordinates rounded to `COORDINATE_PRECISION`
- *   decimals (0 by default, i.e. whole numbers). Points that round to the same
- *   key are the same node.
+ * - Nodes are keyed by their coordinates rounded to whole numbers. Points that
+ *   round to the same key are the same node.
  * - The graph is undirected and simple: no parallel edges. Point-based segment
  *   methods silently skip self-loops, including zero-length segments and
  *   endpoints that round to the same node. Raw graphology methods allow
@@ -472,7 +471,7 @@ export class SpatialGraph extends Graph {
 
   /**
    * Whether any two edges at this node are perpendicular, within `toleranceDeg`
-   * degrees of 90 (default `DEFAULT_ANGLE_TOLERANCE_DEG`). `false` for a node
+   * degrees of 90 (default 10). `false` for a node
    * with fewer than two edges or a point that is not a node.
    */
   hasOrthogonalEdges(node: NxPoint, toleranceDeg = DEFAULT_ANGLE_TOLERANCE_DEG): boolean {

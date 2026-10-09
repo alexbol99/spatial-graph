@@ -1,7 +1,9 @@
 import { readdirSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 import { Point, Segment } from '@flatten-js/core';
-import { SpatialGraph, findIntersection } from '../index.js';
+import * as publicApi from '../index.js';
+import { SpatialGraph } from '../index.js';
+import type { NxEdge, NxPoint } from '../index.js';
 
 // The snippets below are the recipes in README.md and llms.txt. Keep them in sync:
 // when a recipe changes there, change it here.
@@ -20,6 +22,10 @@ describe('documented recipes', () => {
     expect(graph.getJunctions()).toEqual([]);
     expect(graph.getShortestPath([0, 0], [10, 10])).toHaveLength(2);
     expect(graph.findNearestEdge(new Point(4, 1)).start).toEqual(new Point(0, 0));
+  });
+
+  it('exports SpatialGraph as its only runtime value', () => {
+    expect(Object.keys(publicApi)).toEqual(['SpatialGraph']);
   });
 
   it('route and measure', () => {
@@ -53,16 +59,28 @@ describe('documented recipes', () => {
     });
 
     const [a, b] = graph.getEdges();
-    const crossing = findIntersection(a!, b!);
+    if (!a || !b) throw new Error('The graph must have two edges.');
+    const toSegment = ([start, end]: NxEdge) =>
+      new Segment(new Point(...start), new Point(...end));
+    const intersections = toSegment(a).intersect(toSegment(b));
+    const crossing: NxPoint | null =
+      intersections.length === 1 && intersections[0] instanceof Point
+        ? [intersections[0].x, intersections[0].y]
+        : null;
     if (crossing) {
-      graph.splitEdge(a!, crossing);
-      graph.splitEdge(b!, crossing);
+      graph.splitEdge(a, crossing);
+      graph.splitEdge(b, crossing);
     }
 
     expect(crossing).toEqual([5, 5]);
     expect(graph.getJunctions()).toEqual([[5, 5]]);
     expect(graph.size).toBe(4);
-    expect(findIntersection([[0, 0], [1, 0]], [[0, 5], [1, 5]])).toBeNull();
+
+    const overlap = toSegment([[0, 0], [10, 0]]).intersect(
+      toSegment([[5, 0], [15, 0]]),
+    );
+    expect(overlap).toHaveLength(2);
+    expect(overlap.length === 1 ? overlap[0] : null).toBeNull();
   });
 
   it('clean up a network', () => {

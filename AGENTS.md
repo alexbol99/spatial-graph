@@ -26,8 +26,8 @@ Run typecheck, test, build, check:package and check:examples before opening a PR
 ## Layout
 
 - `src/SpatialGraph.ts`: the `SpatialGraph` class (extends graphology `Graph`).
-- `src/utils/`: pure geometry helpers (`geometry`, `intersection`, `projection`).
-- `src/types.ts`, `src/constants.ts`: public types and tunables.
+- `src/utils/`: internal geometry helpers (`geometry`, `projection`).
+- `src/types.ts`: package-owned public types; `src/constants.ts`: internal tunables.
 - `src/index.ts`: the public surface. Everything exported here is public API.
 - `src/__tests__/*.node.spec.ts`: tests next to the code they cover.
 - `examples/*.ts`: runnable examples that assert their own results. `pnpm test` runs

@@ -38,7 +38,7 @@ each. It requires Node.js 22 or later.
 
 ```ts
 import { Point, Segment } from '@flatten-js/core';
-import { SpatialGraph } from '@flatten-js/spatial-graph';
+import { SpatialGraph, type NxEdge, type NxPoint } from '@flatten-js/spatial-graph';
 
 const graph = new SpatialGraph({
   segments: [
@@ -75,11 +75,15 @@ graph.addSegment(new Segment(new Point(4, 3), new Point(...snapped)));
 **Split two crossing edges at their intersection**
 
 ```ts
-import { findIntersection } from '@flatten-js/spatial-graph';
-
 const [a, b] = graph.getEdges(); // any two edges
-const crossing = findIntersection(a, b); // null when they do not cross
-if (crossing) {
+if (!a || !b) throw new Error('Need two edges to find a crossing.');
+
+const toSegment = ([start, end]: NxEdge) =>
+  new Segment(new Point(...start), new Point(...end));
+const intersections = toSegment(a).intersect(toSegment(b));
+if (intersections.length === 1 && intersections[0] instanceof Point) {
+  const [intersection] = intersections;
+  const crossing: NxPoint = [intersection.x, intersection.y];
   graph.splitEdge(a, crossing);
   graph.splitEdge(b, crossing);
 }
@@ -134,20 +138,16 @@ Main groups of methods:
 - **Attributes and labels:** `getPointAttributes`, `mergePointAttributes`, `getEdgeAttributesFor`, `mergeEdgePointAttributes`, `getNodeLabel`, `setNodeLabel`, `getEdgeLabel`, `setEdgeLabel`
 - **Orthogonality:** `hasOrthogonalEdges`, `getNodesWithOrthogonalEdges`
 
-Geometry helpers (`pointsEqual`, `getPointDistance`, `findIntersection`,
-`nearestPointOnSegment`, `projectPointOnSegment`, ...) and the types (`NxPoint`,
-`NxEdge`, `NodeAttributes`, `EdgeAttributes`, ...) are exported from the package root.
+The package root exports `SpatialGraph` and its own TypeScript types (`NxPoint`,
+`NxEdge`, `NodeAttributes`, `EdgeAttributes`, ...). Geometry operations belong to
+`@flatten-js/core`; use its `Point`, `Segment` and other primitives directly.
 
 ## Things to know
 
-- **Coordinates are snapped to a grid.** Points are rounded to
-  `COORDINATE_PRECISION` decimals (0 by default, so whole numbers) to build node
-  keys. Points that round to the same key are the same node, so scale your data
-  if it lives on a finer scale. Helpers that return points (`fromFlattenPoint`,
-  `findIntersection`, `projectPointOnSegment`, ...) snap their results to the same
-  grid; checks such as `isPointOnSegment` and the validation inside
-  `findIntersection` use exact coordinates. `findLineIntersection` returns the
-  exact intersection of the lines through two edges.
+- **Coordinates are snapped to a grid.** Points are rounded to whole numbers to
+  build node keys. Points that round to the same key are the same node, so scale
+  your data if it lives on a finer scale. Point-based graph methods return points
+  on that same grid.
 - **The graph is undirected and simple.** No parallel edges. Point-based segment
   methods skip self-loops: zero-length segments, and segments whose ends round
   to the same node, are skipped without an error. Raw graphology methods allow
