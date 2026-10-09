@@ -1,12 +1,24 @@
 # SpatialGraph audit and refactoring proposal
 
-Date: 2026-10-05. Status: design proposal; no library behavior has been changed.
+Created: 2026-10-05. Updated: 2026-10-09. Status: refactoring plan;
+composition selected and Phase 0 completed. The proposed 2.0 behavior has not
+been implemented.
 
 Audited baseline: `main`, commit
 [`6aefd1f`](https://github.com/alexbol99/spatial-graph/tree/6aefd1fda1c0065b16ff3b87473590a6a0386a0b),
 package version `1.0.1`. This document was prepared on
 `codex/spatial-graph-refactoring-audit`, created directly from that commit after
 confirming local `main` and `origin/main` matched.
+
+Current upstream status: [`v1.1.0`](https://github.com/alexbol99/spatial-graph/releases/tag/v1.1.0)
+was released on 2026-10-09 from `main` after
+[PR #19](https://github.com/alexbol99/spatial-graph/pull/19) removed redundant
+public exports. The audit branch still contains the 1.0.1 implementation plus
+the [Phase 0 consumer inventory](consumer-inventory.md), fixtures, and baseline
+tests. Sections 2–3 and Appendix A record the original 1.0.1 audit; current
+status and remaining work are called out where they affect the plan. Synchronize
+with current `main` before implementing Phase 1. This update changes only the
+audit document on its existing branch.
 
 ### Contents
 
@@ -20,7 +32,7 @@ confirming local `main` and `origin/main` matched.
 8. [Mutation contracts and metadata](#8-mutation-contracts-and-metadata-policy)
 9. [Algorithms and feature boundaries](#9-algorithms-performance-and-feature-boundaries)
 10. [Serialization, exports, and dependencies](#10-serialization-adapters-exports-and-dependencies)
-11. [Open issue disposition](#11-disposition-of-every-current-open-issue)
+11. [Original issue disposition](#11-disposition-of-the-issues-in-the-original-audit)
 12. [Implementation layout](#12-suggested-implementation-layout)
 13. [Implementation phases](#13-implementation-phases-and-acceptance-gates)
 14. [Verification plan](#14-verification-plan-for-the-refactor)
@@ -35,12 +47,12 @@ values. Introduce `SpatialNode` and `SpatialEdge` classes as immutable snapshots
 provide consistent node/edge methods on `SpatialGraph`, and centralize coordinate
 normalization, mutation, and attribute handling.
 
-For the target API, I recommend **composition with Graphology**: `SpatialGraph`
-owns a private Graphology graph instead of extending it. This is an architectural
-recommendation, not a decision already agreed in our discussion. It permits
-consistent methods such as `addNode(point)` without conflicting with inherited
-key-based methods, and prevents raw graph mutations from bypassing spatial
-invariants. Section 5 compares the alternatives and defines the migration cost.
+**Decision: use composition with Graphology.** `SpatialGraph` will own a private
+Graphology graph instead of extending it. The library owner selected this
+architecture after the original audit. It permits consistent methods such as
+`addNode(point)` without conflicting with inherited key-based methods, and
+prevents raw graph mutations from bypassing spatial invariants. Section 5
+compares the alternatives and defines the migration cost.
 
 The company controls the only current consuming project and accepts breaking
 changes. Make one coordinated major-version migration, rather than maintaining
@@ -70,15 +82,16 @@ refactor.
 - Node/edge refers to graph membership; point/segment refers to geometry. A
   midpoint or projection is a point, not automatically a node.
 
-Five node classifications, exact coordinates by default, composition, and the
-specific API names below are recommendations in this document. They were not
-all explicitly settled in the conversation.
+Five node classifications, exact coordinates by default, and the specific API
+names below remain recommendations. Composition is a settled architectural
+decision. Phase 0 found that the consumer needs explicit integer precision and
+currently subclasses `SpatialGraph`; its migration is described in section 13.
 
 ## 2. Audit method and baseline validation
 
 Read the full `SpatialGraph` implementation, public types/constants/exports,
 geometry helpers, tests, all examples, README, `llms.txt`, package configuration,
-and CI/release workflows. Retrieved all 12 currently open GitHub issues, checked
+and CI/release workflows. Retrieved the 12 issues open on 2026-10-05, checked
 the status of issue #8 and its merged PR, and inspected the description/file list
 of the open editor-demo PR. The open issues had no comments at retrieval time.
 
@@ -92,8 +105,8 @@ Ran the existing checks on the baseline using Node `24.14.0` and pnpm `11.1.3`:
 | `pnpm check:package` | Passed: publint and are-the-types-wrong |
 | `pnpm check:examples` | Passed against built `dist` |
 
-Additional behavioral probes ran against that build. They are described below;
-these probes are diagnostic evidence, not newly committed library tests. The
+Additional behavioral probes ran against that **1.0.1** build. They are
+described below; these probes are diagnostic evidence, not newly committed tests. The
 115 passing tests validate existing expectations, including some behavior this
 proposal intentionally changes. No browser-runtime matrix, external consuming
 project, fuzz campaign, or performance benchmark was run. Timings in issue #4
@@ -296,12 +309,23 @@ Source: [`index.ts`](../src/index.ts), [`constants.ts`](../src/constants.ts),
 [`types.ts`](../src/types.ts), and `splitEdge`.
 Related: [#6](https://github.com/alexbol99/spatial-graph/issues/6).
 
-Root wildcard exports expose every utility and constant. `calculatedMovement`
-uses a fixed minimum movement distance of 8. `width`, `clearanceWidth`, `radius`,
-and `closestGeoms` are built into attribute types. `IntersectionResult` and
-`SIMPLE_SEGMENT_COORDS` are unused. Additionally, splitting rewrites a user
-attribute named `id` into a coordinate-pair string when the old ID is truthy;
-this is an application policy hidden in otherwise generic metadata handling.
+On the audited 1.0.1 baseline, root wildcard exports expose every utility and
+constant. `calculatedMovement` uses a fixed minimum movement distance of 8.
+`width`, `clearanceWidth`, `radius`, and `closestGeoms` are built into attribute
+types. `IntersectionResult` and `SIMPLE_SEGMENT_COORDS` are unused. Additionally,
+splitting rewrites a user attribute named `id` into a coordinate-pair string
+when the old ID is truthy; this is an application policy hidden in otherwise
+generic metadata handling.
+
+**1.1.0 update:** [PR #19](https://github.com/alexbol99/spatial-graph/pull/19)
+replaced root wildcards with an explicit export list containing `SpatialGraph`
+and seven package-owned types. It removed the app-specific typed fields, unused
+types/constants, and public geometry-helper exports. This resolves the export
+surface portion of [#6](https://github.com/alexbol99/spatial-graph/issues/6),
+which is now closed. `calculatedMovement`, its internal constant, and the split
+`id` rewrite remain in the class; they are still 2.0 design work. The consumer
+imports none of the removed helper exports, but it reads `edge.width` as a typed
+field and needs its own attribute type in 2.0 (inventory section 4).
 
 Recommendation: explicit exports; generic attributes; caller-owned metadata;
 operation-specific attribute callbacks where needed. Keep genuinely generic
@@ -560,7 +584,7 @@ algorithms. Map routing cost callbacks to its internal edge records. The
 snapshot classes remain independent of Graphology. They need not extend its
 `Attributes`; internal record types satisfy that constraint structurally.
 
-Expose detached interoperability methods:
+Expose detached interoperability methods when a caller needs a separate graph:
 
 - `toGraphology()` returns a new Graphology graph, with top-level `x/y` for
   renderers, a geometric `length`, and nested `data` metadata. It is not the
@@ -570,11 +594,21 @@ Expose detached interoperability methods:
 - Reject directed, multi, self-loop, inconsistent-coordinate, and non-finite
   inputs with actionable errors. Do not partially import them.
 
-Consumers running Graphology algorithms use the detached adapter or a provided
-spatial operation. The conversion costs O(V + E), so do not invoke it on every
-pointer move; core nearest/routing operations use the internal graph directly.
-If a live renderer becomes a measured requirement, design a controlled event
-adapter later rather than exposing mutable storage by default.
+SpatialGraph's own algorithms, including future A*, call the private Graphology
+instance directly; no copy, second adjacency structure, or snapshot
+materialization is required for the search. A detached `toGraphology()` copy costs O(V + E) and
+becomes stale after a mutation. It is an interoperability/serialization boundary,
+not a prerequisite for every Graphology algorithm. If direct external access
+becomes a measured requirement, decide on a controlled read-only view or an
+explicitly documented mutable escape hatch and its index-invalidation semantics.
+The inventoried consumer passes no graph to external Graphology algorithms and
+uses no Graphology events, so Phase 1 does not need such an escape hatch.
+
+The consumer already calls its own persistence serializer `toGraphology()`.
+That method produces its application-specific `CirculationGraphology` JSON,
+with `coords` and `corridor_width`. Rename that consumer serializer (for example,
+`toStoredSkeleton`) during migration so it cannot be confused with a detached
+Graphology instance returned by the proposed library method.
 
 ### 5.2 Alternative: retain inheritance
 
@@ -590,9 +624,9 @@ the inherited contracts or build ambiguous point-versus-key overloads.
 This alternative also requires handling every inherited insertion/import/
 attribute-update method, invalid keys, loop policy, copy options, and event-based
 index invalidation. Returning immutable snapshots does not solve those bypasses.
-Because breaking changes are acceptable and the desired API is element-oriented,
-composition is the stronger long-term recommendation. Inventory the company's
-actual raw Graphology calls before implementing that change.
+Composition is the selected approach. The
+[consumer inventory](consumer-inventory.md) identifies the raw calls, the
+consumer subclass, and protected helpers that Phase 1 must replace.
 
 ### 5.3 Copies and subgraphs
 
@@ -611,7 +645,11 @@ architecture change rather than treating copies as unfinished work.
 
 Recommend `coordinatePrecision: number | null`, with `null` meaning preserve
 finite input coordinates. Use `null` as the proposed 2.0 default; a company
-project relying on the old integer grid must explicitly select `0`.
+project relying on the old integer grid must explicitly select `0`. The
+[consumer inventory](consumer-inventory.md), section 8, confirms that the
+company application is such a project: stored node/corridor keys and editor
+equality depend on whole-unit coordinates. Real producer coordinates were not
+sampled.
 
 Decimal precision quantizes insertion/lookup points using one graph-local
 normalizer. Validate an integer range (proposed `0..15`) and reject coordinates
@@ -732,8 +770,9 @@ offer `getFlattenPoints`, `getFlattenSegments`, and element conversion methods.
 ### 7.2 Naming and migration table
 
 This covers the methods declared by `SpatialGraph` on the audited baseline.
-Inherited Graphology methods need a separate consumer inventory because
-composition removes their automatic availability.
+The completed [consumer inventory](consumer-inventory.md), section 3.2, lists
+the inherited Graphology methods that need destinations because composition
+removes their automatic availability.
 
 | Current method | Proposed replacement / disposition |
 | --- | --- |
@@ -798,6 +837,17 @@ Raw migration examples under composition:
 | `graph.on(...)` | Controlled spatial mutation events if actually used; otherwise reread after operation |
 | Passing `graph` into a Graphology algorithm | Built-in operation or detached `toGraphology()` |
 | `graph instanceof Graph` | No longer true; remove assumption or check the adapter |
+
+Phase 0 identified four gaps in these destinations. Add `nodeCount` and
+`edgeCount` (migrating Graphology `order`/`size`), explicit
+`getGraphAttribute`/`setGraphAttribute` for persisted label counters,
+`getNodeByKey(key)` with strict canonical-key validation for stored references,
+and `clear()` as a spatial mutation if the unused beautify path is retained.
+These are Phase 1 API proposals, not implemented behavior. The consumer uses
+`forEachNode`/`forEachEdge` and raw attribute methods for IDs and width updates;
+migrate them to snapshot iteration and spatial attribute operations. It does
+not pass `SpatialGraph` to Graphology algorithms or use Graphology events,
+`export()`/`import()`, or `instanceof Graph`.
 
 ### 7.3 Missing values and errors
 
@@ -1067,16 +1117,22 @@ Explain Cartesian length regardless of the source coordinate reference system.
 
 ### Deliberate public exports
 
-Replace every root `export *` with an explicit list. Export the graph, snapshot
-classes, geometry values, operation/result types, and reviewed pure helpers.
-Keep internal storage, key formatting internals, numerical constants, and index
-implementation private. Use `.js` extensions under NodeNext as today.
+**Done in 1.1.0:** `src/index.ts` now explicitly exports `SpatialGraph` and
+seven package-owned types; no root `export *` remains. For 2.0, extend that
+deliberate list with snapshot classes, geometry values, and reviewed
+operation/result types. Reintroduce a pure helper only when its public contract
+and consumer need justify it. Keep internal storage, key formatting internals,
+numerical constants, and index implementation private. Use `.js` extensions
+under NodeNext as today.
 
-Remove built-in application metadata and `MIN_EDGE_MOVEMENT_DISTANCE`,
-`SIMPLE_SEGMENT_COORDS`, unused `IntersectionResult`, and `calculatedMovement`.
-Retain or rename generic angle/projection/simplification helpers based on actual
-use. Split constants into private implementation values and explicit options;
-classification thresholds need no global tuning if the type contract defines them.
+The built-in application metadata fields, `SIMPLE_SEGMENT_COORDS`, unused
+`IntersectionResult`, and public geometry-helper exports were removed in 1.1.0.
+The internal `MIN_EDGE_MOVEMENT_DISTANCE` and public class method
+`calculatedMovement` remain; move that application policy out of the 2.0 class.
+The split `id` rewrite also remains to be replaced by a consumer-supplied
+attribute callback. Review generic helpers individually rather than restoring
+the entire old export surface. Classification thresholds need no global tuning
+if the type contract defines them.
 
 Retain the published `files` allowlist: `dist`, `README.md`, `llms.txt`, `LICENSE`.
 This design document, tests, examples, benchmarks, and demo remain repository
@@ -1102,17 +1158,19 @@ test; a neutral bundler target is insufficient evidence. Document a separate
 minimum Node version for running raw TypeScript examples. Add `check:examples`
 to release validation so it matches CI and `AGENTS.md`.
 
-## 11. Disposition of every current open issue
+## 11. Disposition of the issues in the original audit
 
-Issue status was retrieved on 2026-10-05. No issues were edited or closed as
-part of preparing this document. “Core” identifies intended 2.0 scope;
-“follow-up” identifies features that can land after the contracts are stable.
+Twelve issues were open when this audit began on 2026-10-05. As of 2026-10-09,
+eleven remain open: [#6](https://github.com/alexbol99/spatial-graph/issues/6)
+closed after PR #19. “Core” identifies intended 2.0 scope; “follow-up” identifies
+features that can land after the contracts are stable. This document does not
+change issue status.
 
 | Issue | Audit disposition | Planned work / acceptance condition |
 | --- | --- | --- |
 | [#4 — Spatial index and nearest-query speed](https://github.com/alexbol99/spatial-graph/issues/4) | Confirmed; speedup claims not remeasured | Core: direct coordinate scan and structured exact result. Follow-up: benchmark-selected index; identical scan/index answers after every mutation |
 | [#5 — Custom cost, A*, arbitrary-point routing](https://github.com/alexbol99/spatial-graph/issues/5) | Confirmed; length/weight conflation is a core problem | Core: structured paths and cost/length separation; cost callback next. Follow-up: A* contract and virtual geometric routing. Directed edges deferred |
-| [#6 — Application-specific/unused exports](https://github.com/alexbol99/spatial-graph/issues/6) | Confirmed with qualifications | Core: explicit exports, generic metadata, remove fixed movement policy and hidden ID rewrite. Retain useful generic longest-edge/projection operations with corrected contracts |
+| [#6 — Application-specific/unused exports](https://github.com/alexbol99/spatial-graph/issues/6) | **Closed in 1.1.0:** explicit exports, package-owned types, unused/root helper removals | Remaining 2.0 work: remove `calculatedMovement`/its fixed internal threshold and the hidden split `id` rewrite; keep reviewed generic operations as appropriate |
 | [#7 — Geometry gaps](https://github.com/alexbol99/spatial-graph/issues/7) | Confirmed; several independent features | Core: reject unsupported arcs, validated split, safe join, exact geometry. Follow-up: overlap result, planarize, proximity merging. Faces/native curves deferred |
 | [#9 — Off-edge split / missing weight](https://github.com/alexbol99/spatial-graph/issues/9) | Confirmed | Core: validate exact and canonical split point; `null` for missing geometric length; user weight has no automatic geometric meaning |
 | [#10 — Store coordinates / queue performance](https://github.com/alexbol99/spatial-graph/issues/10) | Confirmed | Core: canonical `x/y` in internal records, no routine parsing, head-index BFS, adapter exposes renderer coordinates |
@@ -1121,7 +1179,7 @@ part of preparing this document. “Core” identifies intended 2.0 scope;
 | [#13 — Property/performance tests](https://github.com/alexbol99/spatial-graph/issues/13) | Confirmed, baseline now 115 rather than issue's historical 112 | Core: targeted invariants and constrained property tests; follow-up benchmark suite and broad performance regression tracking |
 | [#14 — GeoJSON](https://github.com/alexbol99/spatial-graph/issues/14) | Confirmed absent | Follow-up adapter after precision/metadata/import contracts; round-trip coordinates and properties without geodesic claims |
 | [#15 — Precision / silent segment drops](https://github.com/alexbol99/spatial-graph/issues/15) | Confirmed, plus off-edge projection and malformed numeric input | Core: per-instance precision, exact default proposed, finite validation, insertion reports, exact geometry helpers |
-| [#16 — Audit roadmap](https://github.com/alexbol99/spatial-graph/issues/16) | Tracking issue; its release staging and #8 checkbox are stale | Replace patch/minor/deprecation staging with a coordinated core major plus follow-ups; track acceptance conditions rather than issue count |
+| [#16 — Audit roadmap](https://github.com/alexbol99/spatial-graph/issues/16) | Tracking issue; its release staging and #8/#6 checkboxes are stale | Replace patch/minor/deprecation staging with a coordinated core major plus follow-ups; track acceptance conditions rather than issue count |
 
 [Issue #8](https://github.com/alexbol99/spatial-graph/issues/8) is **closed** and
 fixed in `main` through [PR #18](https://github.com/alexbol99/spatial-graph/pull/18).
@@ -1184,12 +1242,18 @@ Check whether the editor-demo PR has merged when implementation begins.
 
 Gate: every used method has a migration destination; stored files have an
 import strategy; integer precision and geometric weight assumptions are known.
-This audit cannot complete that inventory because the consuming project was not
-provided. It is implementation preparation, not a blocker for this proposal.
 
-Status 2026-10-08: done for what the code can answer; see
-[consumer-inventory.md](consumer-inventory.md) for the inventory, migration
-destinations, baseline fixtures/tests and the open items that need data or a decision.
+**Completed 2026-10-08 for the repository and consumer code available.**
+[consumer-inventory.md](consumer-inventory.md) records the actual API calls,
+subclass/protected-method use, metadata and persisted format, 2.0 migration
+destinations, synthetic fixtures, and 36 baseline tests. The consumer has no
+routing flow and no saved library `export()` payload; it stores its own skeleton
+JSON. Four inherited-API destinations identified there are proposed in section
+7.2 above. Five external-data or product decisions remain in inventory section
+9.4 (including real producer coordinates and whether to keep the unused
+beautify path). They are Phase 1/consumer-migration inputs, not a reason to
+repeat the inventory. PR #17 remains open as of 2026-10-09; its demo imports
+helpers removed by PR #19 and needs adaptation if it merges.
 
 ### Phase 1 — Establish coordinates, storage, and snapshot objects
 
@@ -1198,6 +1262,16 @@ precision, generic metadata, `SpatialNode`/`SpatialEdge`, canonical equality,
 Euclidean distance, classification, midpoint, length, basic CRUD/queries, and
 detached Graphology/Flatten adapters. Change names directly on a development
 branch; do not publish a half-migrated package.
+
+Start from current `main` at 1.1.0. Replace the consumer's
+`CirculationGraph extends SpatialGraph` with composition or an application
+adapter using public spatial methods; its protected `addEdgeWithAttrs` and
+`parseNode` uses cannot carry over unchanged. Preserve the consumer's key
+format with `coordinatePrecision: 0`, its label counters through graph-metadata
+methods, and its stored JSON through its own load/save adapter. Provide
+`nodeCount`/`edgeCount`, key-to-node lookup, and any needed controlled iteration
+before removing inherited Graphology methods. Define generic consumer attribute
+types so `width` remains type-safe after 1.1.0 removed it from the package type.
 
 Gate: key/coordinate consistency; the proposed property-based usage works;
 retained snapshots remain readable and unchanged at the top level; public
@@ -1233,6 +1307,10 @@ consumer migration. Update `AGENTS.md` to replace tuple-only and inheritance
 guidance with the new coordinate/element contracts. Update `README.md`,
 `llms.txt`, affected examples, and recipe tests in the same implementation change.
 
+The initial explicit export list and removal of redundant root exports were
+completed in 1.1.0. This phase reviews additions to that list for the new 2.0
+API and finishes application-policy removal; it does not redo PR #19.
+
 Gate: all repository checks pass; published files remain within the existing
 allowlist; ESM/CJS declarations and consumer imports work; legacy data is migrated
 or explicitly supported; no stale public examples remain. Add the examples
@@ -1248,7 +1326,7 @@ Gate: index output agrees with scans across mutation sequences; virtual routing
 leaves export/revision unchanged; planarization reports grid incompatibility and
 has idempotence fixtures; adapter round trips retain intended metadata.
 
-No time estimate is assigned without the consumer inventory. The phases are
+No time estimate is assigned from the inventory alone. The phases are
 dependency order, not a promise that every issue belongs in one release.
 
 ## 14. Verification plan for the refactor
@@ -1323,8 +1401,8 @@ library tests cannot prove its migration is complete.
 | --- | --- | --- |
 | Snapshot versus live object | Snapshot, no graph reference | `node.type` becomes stale after edits; fetch again; nested metadata sharing documented |
 | Node identity | Canonical coordinates within one graph | Recreation at the same position compares equal; no temporal or cross-graph identity |
-| Graphology inheritance | Replace with composition | Raw methods/events/instance checks need consumer migration; adapters cost O(V+E) |
-| Default precision | Exact finite coordinates (`null`) in 2.0 | Existing consumer must choose `0` to retain grid identity; floating-point closeness still explicit |
+| Graphology inheritance | **Decided: replace with composition** | Inventory confirms one consumer subclass and protected helpers must migrate. Internal algorithms use the private graph directly; detached adapters cost O(V+E) only when called |
+| Default precision | Exact finite coordinates (`null`) in 2.0 remains proposed | Inventory confirms the current consumer must choose `0` to retain grid identity and stored keys; floating-point closeness still explicit |
 | Classification | Five labels; corner means a bend | Consumer switch statements need exhaustive update; validate angle tolerance on real fixtures |
 | Missing graph values | `null` for scalar/object queries | Callers must handle null instead of zero/empty dictionaries/nearest exceptions |
 | Length/cost | Derived length; callback-defined cost | Legacy user weight no longer overwritten; custom cost after splitting needs explicit semantics |
@@ -1333,16 +1411,20 @@ library tests cannot prove its migration is complete.
 | Split/join | Geometrically safe by default | Existing editor shortcuts may need explicit reshape/collapse operations |
 | Unsupported curves | Reject with actionable error | Data that previously lost arcs silently now fails visibly |
 
-These recommendations are concrete enough to implement and review. The highest
-remaining risk is migrating actual consumer assumptions, especially raw
-Graphology access, integer-grid identity, nested metadata, editor history, and
-user IDs. Address those through Phase 0 fixtures, rather than adding implicit
-graph references or preserving inconsistent legacy contracts in the new classes.
+The inventory makes the migration reviewable: it identifies actual raw
+Graphology calls, 44 files importing the package, the editor's drag/rebuild
+behavior, integer-grid identity, typed width, labels, in-session IDs, and its
+independent stored JSON/history. Use its fixtures to protect those behaviors;
+resolve the five remaining external questions before changing affected consumer
+flows. Composition and completion of Phase 0 are settled; classifications,
+precision default, and detailed mutation result shapes remain proposals.
 
 ## Appendix A. Reproducing the main correctness probes
 
-Run on the audited 1.0.1 baseline after `pnpm build`, from the repository root.
-This script intentionally confirms current behavior, including undesired
+Run on the audited 1.0.1 source or the original audit branch after `pnpm build`,
+from that checkout's repository root. Do not run this old probe unchanged against
+1.1.0: `nearestPointOnSegment` and `findIntersection` are no longer root exports.
+This script intentionally confirms the old behavior, including undesired
 behavior; it is not the expected test suite for the refactor.
 
 ```sh
