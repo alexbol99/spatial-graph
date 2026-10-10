@@ -19,10 +19,19 @@ describe('redesign foundation', () => {
     const graph = new SpatialGraph<{ label?: string }, { nested: { value: number } }>({
       createNodeAttributes: () => ({}),
     });
-    const inserted = graph.addEdge([[0, 0], [3, 4]], { nested });
+    const inserted = graph.addEdge(
+      [
+        [0, 0],
+        [3, 4],
+      ],
+      { nested },
+    );
     expect(inserted.status).toBe('added');
     const node = graph.getNode([0, 0])!;
-    const edge = graph.getEdge([[0, 0], [3, 4]])!;
+    const edge = graph.getEdge([
+      [0, 0],
+      [3, 4],
+    ])!;
     expect(edge.length).toBe(5);
     expect(edge.midpoint).toEqual([1.5, 2]);
     expect(edge.toFlattenSegment().length).toBe(5);
@@ -44,14 +53,35 @@ describe('redesign foundation', () => {
   it('classifies topology from stored coordinates and compares geometric identity', () => {
     const graph = new SpatialGraph({ createNodeAttributes: () => ({}) });
     graph.addNode([20, 20], {});
-    graph.addEdge([[0, 0], [1, 0]], {});
-    graph.addEdge([[1, 0], [2, 0]], {});
+    graph.addEdge(
+      [
+        [0, 0],
+        [1, 0],
+      ],
+      {},
+    );
+    graph.addEdge(
+      [
+        [1, 0],
+        [2, 0],
+      ],
+      {},
+    );
     expect(graph.getNodeType([20, 20])).toBe('isolated');
     expect(graph.getNodeType([0, 0])).toBe('stub');
     expect(graph.getNodeType([1, 0])).toBe('intermediate');
-    graph.addEdge([[1, 0], [1, 1]], {});
+    graph.addEdge(
+      [
+        [1, 0],
+        [1, 1],
+      ],
+      {},
+    );
     expect(graph.getNodeType([1, 0])).toBe('junction');
-    graph.removeEdge([[1, 0], [2, 0]]);
+    graph.removeEdge([
+      [1, 0],
+      [2, 0],
+    ]);
     expect(graph.getNodeType([1, 0])).toBe('corner');
     expect(graph.getNodeDegree([99, 99])).toBeNull();
 
@@ -59,27 +89,85 @@ describe('redesign foundation', () => {
     const b = graph.getNode([1, 0])!;
     expect(a.equals(graph.getNode([0, 0])!)).toBe(true);
     expect(a.distanceTo(b)).toBe(1);
-    expect(graph.getEdge([[0, 0], [1, 0]])!.equals(graph.getEdge([[1, 0], [0, 0]])!)).toBe(true);
+    expect(
+      graph
+        .getEdge([
+          [0, 0],
+          [1, 0],
+        ])!
+        .equals(
+          graph.getEdge([
+            [1, 0],
+            [0, 0],
+          ])!,
+        ),
+    ).toBe(true);
   });
 
   it('validates input before insertion and reports collapsed and duplicate edges', () => {
     const graph = new SpatialGraph({ coordinatePrecision: 0 });
     graph.addNode([0, 0], {});
     graph.addNode([1, 0], {});
-    expect(graph.addEdge([[0, 0], [0.4, 0]], {}).status).toBe('collapsed');
+    expect(
+      graph.addEdge(
+        [
+          [0, 0],
+          [0.4, 0],
+        ],
+        {},
+      ).status,
+    ).toBe('collapsed');
     expect(graph.nodeCount).toBe(2);
     expect(graph.edgeCount).toBe(0);
-    expect(graph.addEdge([[0, 0], [1, 0]], {}).status).toBe('added');
-    expect(graph.addEdge([[1, 0], [0, 0]], {}).status).toBe('existing');
-    expect(() => graph.addEdge([[1, 0], [Number.NaN, 0]], {})).toThrow(/finite/);
+    expect(
+      graph.addEdge(
+        [
+          [0, 0],
+          [1, 0],
+        ],
+        {},
+      ).status,
+    ).toBe('added');
+    expect(
+      graph.addEdge(
+        [
+          [1, 0],
+          [0, 0],
+        ],
+        {},
+      ).status,
+    ).toBe('existing');
+    expect(() =>
+      graph.addEdge(
+        [
+          [1, 0],
+          [Number.NaN, 0],
+        ],
+        {},
+      ),
+    ).toThrow(/finite/);
     expect(graph.edgeCount).toBe(1);
-    expect(graph.addEdge([[1, 0], [2, 0]], {}).status).toBe('added');
+    expect(
+      graph.addEdge(
+        [
+          [1, 0],
+          [2, 0],
+        ],
+        {},
+      ).status,
+    ).toBe('added');
     expect(graph.nodeCount).toBe(3);
   });
 
   it('exports a detached Graphology graph with derived geometry and copied metadata', () => {
     const graph = new SpatialGraph({ createNodeAttributes: () => ({}) });
-    graph.addEdge([[0, 0], [3, 4]], { label: 'link' });
+    graph.addEdge(
+      [
+        [0, 0],
+        [3, 4],
+      ],
+      { label: 'link' },
+    );
     const detached = graph.toGraphology();
     expect(detached.getNodeAttributes('0,0')).toEqual({ x: 0, y: 0, data: {} });
     const edgeKey = detached.edge('0,0', '3,4')!;
@@ -98,7 +186,15 @@ describe('redesign foundation', () => {
     const quantized = new SpatialGraph({ coordinatePrecision: 15 });
     expect(() => quantized.getNodeKey([1e308, 0])).toThrow(/quantized/);
     const withFactory = new SpatialGraph({ createNodeAttributes: () => ({}) });
-    expect(() => withFactory.addEdge([[-1e308, 0], [1e308, 0]], {})).toThrow(/length must be finite/);
+    expect(() =>
+      withFactory.addEdge(
+        [
+          [-1e308, 0],
+          [1e308, 0],
+        ],
+        {},
+      ),
+    ).toThrow(/length must be finite/);
     expect(withFactory.nodeCount).toBe(0);
   });
 });

@@ -284,6 +284,11 @@ the stored labels of existing plans do not change, because labels are persisted,
 but newly labelled graphs will number differently. Treat that as an intended
 change and record it here when it happens.
 
+Implemented 2.0 change: `getConnectedComponents()` now delegates to
+`graphology-components` and visits nodes in DFS order rather than BFS order.
+Component membership and isolated-node handling are preserved. Newly assigned
+labels may differ within a component; persisted labels remain unchanged.
+
 ### 7.5 Neutral values for missing members
 
 The consumer relies on `0`, `[]`, `{}` and `null` for missing points in places
@@ -440,4 +445,5 @@ identity preservation, simultaneous edits, snapping and split/connect are covere
 The real consuming project is not checked out in this workspace; this confirms
 the representative adapter contract, not migration of its 44 importing files
 or execution of its build/tests. Section 9.4's external-data decisions remain
-consumer release checks.
+consumer migration checks. By the owner's release decision, migration can target
+the published 2.0 package and does not gate library release.

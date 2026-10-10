@@ -2,7 +2,10 @@ import { defineConfig } from 'tsdown';
 import { readFileSync } from 'node:fs';
 
 const rbushLicense = readFileSync(new URL('./node_modules/rbush/LICENSE', import.meta.url), 'utf8');
-const quickselectLicense = readFileSync(new URL('./licenses/quickselect.txt', import.meta.url), 'utf8');
+const quickselectLicense = readFileSync(
+  new URL('./licenses/quickselect.txt', import.meta.url),
+  'utf8',
+);
 
 export default defineConfig({
   entry: ['src/index.ts'],

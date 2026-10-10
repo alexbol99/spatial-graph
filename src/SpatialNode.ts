@@ -12,8 +12,17 @@ export class SpatialNode<N extends object = NodeAttributes> {
   readonly attributes: Readonly<N>;
 
   /** @internal Constructed by SpatialGraph; use graph.getNode instead. */
-  constructor(token: symbol, key: string, point: Point2D, degree: number, type: NodeType, attributes: N) {
-    if (token !== snapshotToken) throw new TypeError('Use graph.getNode to obtain a SpatialNode.');
+  constructor(
+    token: symbol,
+    key: string,
+    point: Point2D,
+    degree: number,
+    type: NodeType,
+    attributes: N,
+  ) {
+    if (token !== snapshotToken) {
+      throw new TypeError('Use graph.getNode to obtain a SpatialNode.');
+    }
     this.key = key;
     this.point = freezePoint(point);
     this.degree = degree;

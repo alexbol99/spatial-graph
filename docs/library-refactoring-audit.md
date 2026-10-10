@@ -2,8 +2,9 @@
 
 Created: 2026-10-05. Updated: 2026-10-10. Status: 2.0 library implementation
 on `codex/spatial-graph-redesign`; composition and the core/follow-up library
-features below are implemented. Consumer migration and release remain external
-gates. [Section 16](#16-implementation-status-and-validation) records the delivered
+features below are implemented. Publication remains tag-driven; consumer migration
+is separate work and may target the released version, not a release gate.
+[Section 16](#16-implementation-status-and-validation) records the delivered
 API, checks, measurements, and limitations.
 
 Audited baseline: `main`, commit
@@ -579,11 +580,28 @@ mutation boundary is responsible for updating it. Require undirected, simple,
 loop-free storage. User attributes named `x`, `type`, `length`, or `id` remain
 ordinary data without silently overwriting geometry.
 
-Graphology supplies adjacency and attributes. The internal routing module
-implements Dijkstra and reopening A* over those adjacency records, with a shared
-heap and validated costs; it does not require an exported graph copy. The
+Graphology supplies adjacency and attributes. The internal routing module now
+delegates Dijkstra and reopening A* to `graphology-shortest-path` 2.1.0 and adapts
+its node-key results into spatial paths. Costs and heuristics are validated before
+search. The custom search engine is removed; the local heap serves RBush search.
+Closed edges are removed from a temporary copy because upstream weight getters
+coerce null to a default weight. Default routing needs no exported graph copy. The
 snapshot classes remain independent of Graphology. They need not extend its
 `Attributes`; internal record types satisfy that constraint structurally.
+
+Connected components likewise call `graphology-components` 1.5.4 directly on
+private adjacency and materialize its DFS-ordered keys as spatial snapshots.
+There is no local component search or detached export. Chain/cycle decomposition
+remains local because it partitions edges into maximal degree-2 walks rather
+than enumerating simple paths between endpoints.
+
+`bfs`, `bfsFromNode`, `dfs`, and `dfsFromNode` delegate to
+`graphology-traversal` 0.3.1 on private adjacency. Visitors receive a
+`SpatialNode` snapshot and depth; they cannot mutate the graph or start a nested
+traversal. Returning true skips expansion of that node, not the whole traversal.
+Whole-graph methods visit all nodes, including isolated ones; from-node methods
+make no visits for a missing start. BFS depth counts traversal hops; DFS depth is
+discovery depth. Direction-mode options are omitted for undirected storage.
 
 Expose detached interoperability methods when a caller needs a separate graph:
 
@@ -595,8 +613,11 @@ Expose detached interoperability methods when a caller needs a separate graph:
 - Reject directed, multi, self-loop, inconsistent-coordinate, and non-finite
   inputs with actionable errors. Do not partially import them.
 
-SpatialGraph's own algorithms, including A*, call the private Graphology
-instance directly; no copy or second adjacency structure is required for the search. Public
+Ordinary Dijkstra/A* routes without closed edges call the private Graphology
+instance directly. Closed-edge queries use a filtered copy; virtual projection
+routes use a copy with temporary nodes and links. Both copy cases add O(V+E)
+time and space before search, leave live storage/indexes/revision unchanged,
+and require no public `toGraphology()` export. Public
 cost/heuristic callbacks receive snapshots during validation; adjacency search
 itself uses internal keys. A detached `toGraphology()` copy costs O(V + E) and
 becomes stale after a mutation. It is an interoperability/serialization boundary,
@@ -820,7 +841,7 @@ removes their automatic availability.
 | `findIsolatedPaths(subset)` | `findTerminalPaths(subset)`; degree measured within the induced subset |
 | `union(other)` | Keep name; validate coordinate policy, preserve metadata, return merge report |
 | Node/edge label getters/setters | Keep names with element inputs; getter `null` for missing/unlabeled; setters report missing without creating |
-| `getConnectedComponents()` | Keep name; snapshot groups, key-based head-index BFS internally |
+| `getConnectedComponents()` | Keep name; snapshot groups from `graphology-components` DFS on private adjacency |
 | `getNeighborsByLeftTurn(node, incoming)` | Keep with explicit `Vector2D` incoming direction, canonical node coordinates; not a point representing the prior node |
 | `createCompleteGraph(points, callback)` | `fromPoints(points, {connect, ...options})`; graph-local normalization; callback over canonical points |
 | `copy`, `emptyCopy`, `nullCopy` | Keep spatial copy contracts, policy/metadata preserved |
@@ -996,13 +1017,15 @@ export interface PathOptions<
   N extends object = NodeAttributes,
   E extends object = EdgeAttributes,
 > {
-  algorithm?: 'dijkstra' | 'astar';
+  algorithm?: PathAlgorithm;
   cost?: (edge: SpatialEdge<N, E>) => number | null;
   heuristic?: (node: SpatialNode<N>, goal: SpatialNode<N>) => number;
 }
 ```
 
-Reject unknown algorithms and heuristics supplied without `algorithm: 'astar'`. Resolve cost/heuristic
+Export `PathAlgorithm.Dijkstra` and `PathAlgorithm.AStar`; Graphology supplies no
+algorithm enum. Reject unknown algorithms and heuristics supplied without
+`algorithm: PathAlgorithm.AStar`. Resolve cost/heuristic
 callback views consistently for one graph revision, and avoid allowing callbacks
 to mutate the graph during routing.
 
@@ -1026,8 +1049,8 @@ that contract before extending virtual routes to custom costs.
 ### Nearest queries and indexing
 
 First implement an exact scan over internal coordinates, avoiding Flatten and
-snapshot creation for losing candidates. Store coordinates once, traverse keys
-internally, and replace BFS shifting with a head index.
+snapshot creation for losing candidates. Store coordinates once and traverse keys
+internally. Connected components now delegate to Graphology DFS instead of a local queue.
 
 **Decision: use RBush as the private mutable spatial index for SpatialGraph.**
 It indexes node points and edge bounding boxes; exact geometry determines the
@@ -1175,20 +1198,51 @@ closed after PR #19. The original core/follow-up staging is now superseded by th
 column below. This document does not
 change issue status.
 
-| Issue | Baseline finding / status | Implementation / remaining gate |
+| Issue | Current relevance after the 2.0 redesign | Implementation / remaining scope |
 | --- | --- | --- |
-| [#4 — Spatial index and nearest-query speed](https://github.com/alexbol99/spatial-graph/issues/4) | Confirmed; historical issue timing claims are not reproduced | Implemented: private mutable RBush indexes, exact best-first nearest search, reference scans and mutation differential tests. Performance experiments are maintained outside this repository. |
-| [#5 — Custom cost, A*, arbitrary-point routing](https://github.com/alexbol99/spatial-graph/issues/5) | Confirmed; length/weight conflation is a core problem | Implemented: length/cost separation, zero/closed-edge costs, reopening A*, and nonmutating geometric virtual routes. Directed edges and partial-edge custom costs remain deferred. |
-| [#6 — Application-specific/unused exports](https://github.com/alexbol99/spatial-graph/issues/6) | **Closed in 1.1.0:** explicit exports, package-owned types, unused/root helper removals | Implemented: no movement threshold/application policy; explicit split metadata callback; deliberate root exports. |
-| [#7 — Geometry gaps](https://github.com/alexbol99/spatial-graph/issues/7) | Confirmed; several independent features | Implemented: strict split, safe join, explicit bend collapse, overlap-aware planarization, proximity merging, and unsupported-shape rejection. Faces/native curves remain deferred. |
-| [#9 — Off-edge split / missing weight](https://github.com/alexbol99/spatial-graph/issues/9) | Confirmed | Implemented: exact/canonical split validation, null missing length, ordinary user weight metadata. |
-| [#10 — Store coordinates / queue performance](https://github.com/alexbol99/spatial-graph/issues/10) | Confirmed | Implemented: stored canonical x/y, key-based algorithms, head-index BFS, detached renderer coordinates. |
-| [#11 — Naming cleanup](https://github.com/alexbol99/spatial-graph/issues/11) | Confirmed; deprecation staging unnecessary for current consumer | Implemented: snapshots, consistent node/edge names, direct breaking migration, updated docs/examples/recipes/AGENTS. |
-| [#12 — Dependencies / engines](https://github.com/alexbol99/spatial-graph/issues/12) | Manifest concern verified; compatibility now tested | Implemented: Graphology 0.26 checks and latest internal dependency, Node 22+ retained, Chromium smoke, ESM/CJS runtime and generic consumers. Upstream NodeNext declaration caveat is in section 16. |
-| [#13 — Property/performance tests](https://github.com/alexbol99/spatial-graph/issues/13) | Confirmed, baseline now 115 rather than issue's historical 112 | Implemented: seeded invariant/property tests. Benchmark tooling is intentionally outside this repository; no wall-clock CI threshold. |
-| [#14 — GeoJSON](https://github.com/alexbol99/spatial-graph/issues/14) | Absent in the baseline; now implemented | Implemented: Point/LineString/MultiLineString adapter, properties, dimensions policy, collapse reports. Cartesian geometry only. |
-| [#15 — Precision / silent segment drops](https://github.com/alexbol99/spatial-graph/issues/15) | Confirmed, plus off-edge projection and malformed numeric input | Implemented: exact default, per-instance precision, finite/quantization validation, atomic insertion reports, exact projections/midpoints. |
-| [#16 — Audit roadmap](https://github.com/alexbol99/spatial-graph/issues/16) | Tracking issue; its release staging and #8/#6 checkboxes are stale | Library roadmap implemented through phases 1–5 within the stated scope. External consumer migration and tag-driven release are not performed by this branch. |
+| [#4 — Spatial index and nearest-query speed](https://github.com/alexbol99/spatial-graph/issues/4) | Original scan/allocation problem addressed; candidate for closure after merge | Private mutable RBush indexes perform best-first nearest search with exact point/segment evaluation. Scan-reference and mutation differential tests cover correctness. Benchmarks remain in the owner's separate repository; no new 100k-edge timing claim is made. |
+| [#5 — Custom cost, A*, arbitrary-point routing](https://github.com/alexbol99/spatial-graph/issues/5) | Main request addressed; directed/one-way edges remain relevant as a later feature | Length and user metadata are separate; Graphology Dijkstra/A*, custom nonnegative/zero/closed costs, structured cost/length results and nonmutating geometric virtual routes are implemented. Custom costs on partial edges are also deferred pending a traversal-cost contract. Neither extension gates 2.0. |
+| [#6 — Application-specific/unused exports](https://github.com/alexbol99/spatial-graph/issues/6) | Already closed in 1.1.0 | Explicit exports, package-owned types and redundant helper removal landed in main. The redesign also removes hidden application policy and exposes explicit split metadata callbacks. |
+| [#7 — Geometry gaps](https://github.com/alexbol99/spatial-graph/issues/7) | Overlaps, planarization, nearby merging and silent arc loss addressed; face extraction remains relevant | Index-assisted overlap/crossing/T-junction planarization and transitive proximity merging are implemented. Unsupported arcs throw before insertion, satisfying the issue's rejection alternative. `findPaths()` preserves edge-covering cycles but does not enumerate all cycles or extract planar faces. Faces/native curves remain independent future work. |
+| [#9 — Off-edge split / missing weight](https://github.com/alexbol99/spatial-graph/issues/9) | Addressed; candidate for closure after merge | Split validates exact and canonical containment before mutation; geometric length is independent of user weight; missing edge length returns null. Regression tests cover rejected off-edge/grid-displaced splits and missing queries. |
+| [#10 — Store coordinates / queue performance](https://github.com/alexbol99/spatial-graph/issues/10) | Original algorithm problem addressed; candidate for closure after merge | Stored canonical x/y replaces routine key parsing. Components use `graphology-components` DFS directly; BFS/DFS wrappers use `graphology-traversal`, not a local shifting queue. Key parsing remains only at explicit key lookup/legacy import boundaries. Renderer adapters expose x/y. Benchmarks are external by owner decision. |
+| [#11 — Naming cleanup](https://github.com/alexbol99/spatial-graph/issues/11) | Addressed by the accepted major-version cutover; candidate for closure after merge | Consistent node/edge graph vocabulary, Point2D/Segment2D coordinate values, immutable snapshots and explicit Flatten adapters replace mixed legacy names. README/llms/examples/AGENTS document the breaking migration. The owner accepted direct removal instead of alias/deprecation staging. |
+| [#12 — Dependencies / engines](https://github.com/alexbol99/spatial-graph/issues/12) | Original dependency concern addressed; older Node support is optional future scope | Graphology ^0.26.0 is installed and exercised by package probes. Composition removes the inherited-Graph `instanceof` premise; Graphology remains a private implementation dependency. Node 22+ is an explicit support policy, with CI configured for 22/24 and Chromium tested; widening runtime support is not required for 2.0. |
+| [#13 — Property/performance tests](https://github.com/alexbol99/spatial-graph/issues/13) | Property-test request addressed; in-repo benchmark proposal superseded by owner decision | Seeded properties cover edge-once decomposition, component partitions, simultaneous moves, spatial JSON and indexed/reference nearest agreement. Split/join recovery has geometry and metadata-policy qualifications. Performance experiments live separately; do not reintroduce benchmark tooling or timing thresholds here. |
+| [#14 — GeoJSON](https://github.com/alexbol99/spatial-graph/issues/14) | Addressed; candidate for closure after merge | Point/LineString/MultiLineString import, edge properties, line/isolated-point export, dimension policy and collapsed insertion reports are implemented and tested. Geometry is Cartesian. Optional chain-merging exports are not needed for the proposed basic adapter. |
+| [#15 — Precision / silent segment drops](https://github.com/alexbol99/spatial-graph/issues/15) | Addressed by the accepted major version; candidate for closure after merge | Exact default, per-instance decimal precision and finite/quantization checks replace the global integer grid. Insertions return added/existing/collapsed reports. `mergeNearbyNodes` provides explicit tolerance clustering; it does not silently alter coordinate identity during insertion. |
+| [#16 — Audit roadmap](https://github.com/alexbol99/spatial-graph/issues/16) | Tracking issue is stale; refresh it after merge | Core roadmap work is implemented in 2.0; its #6/#8 unchecked entries are already closed. Directed edges, planar faces/general cycle enumeration, native curves and optional generated API documentation remain future scope. Benchmarks stay external. Consumer migration may follow publication and is not a library release gate. |
+
+### Release-readiness review of open issues (2026-10-10)
+
+Read the current title/body of all eleven open issues, and separately verified
+that #6 and #8 are closed and PR #17 remains open. The issue descriptions still
+refer to the 1.0.0 architecture. The table distinguishes original findings from
+behavior in this working tree; implemented work is not yet a released npm fix.
+No GitHub issue, checkbox, comment, or PR state was changed by this review.
+
+After the redesign merges, #4, #9, #10, #11, #14 and #15 can be closed against
+its implementation and tests. #12 can be closed with the composition and
+Node-support decisions recorded; #13 can be closed for the library scope with
+its benchmark work explicitly assigned to the separate repository. Keep or split
+#5/#7 for directed edges and planar faces/general cycle extraction, and refresh
+#16 to distinguish completed 2.0 work from those later features. Native curve
+support and generated API docs can be tracked separately if desired.
+
+None of the reviewed open issues supplies an unmet requirement for the agreed
+2.0 release. Deferred features are deliberate scope decisions, not release gates.
+The owner has also confirmed that the company application can migrate against
+the published package. Publication still needs committed/pushed changes and
+successful CI/release validation.
+
+Evidence lives in [SpatialGraph.ts](../src/SpatialGraph.ts), the private
+[spatial index](../src/internal/spatialIndex.ts),
+[routing adapter](../src/algorithms/routing.ts),
+[geometry regressions](../src/__tests__/geometry.node.spec.ts),
+[adapter regressions](../src/__tests__/adapters.node.spec.ts),
+[algorithm regressions](../src/__tests__/algorithms.node.spec.ts),
+[traversal regressions](../src/__tests__/traversal.node.spec.ts), and
+[seeded invariants](../src/__tests__/invariants.node.spec.ts).
 
 [Issue #8](https://github.com/alexbol99/spatial-graph/issues/8) is **closed** and
 fixed in `main` through [PR #18](https://github.com/alexbol99/spatial-graph/pull/18).
@@ -1218,13 +1272,13 @@ src/
     storage.ts            private Graphology records and snapshot materializers
     mutations.ts          planning and deterministic conflict policy
     spatialIndex.ts       mutable node/edge RBush indexes and exact best-first search
-    heap.ts               stable heap for routing and nearest search
+    heap.ts               stable heap for nearest spatial search
     snapshotToken.ts      private materialization token
   algorithms/
     classification.ts     degree/angle classification
-    traversal.ts          components and edge-covering path decomposition
+    traversal.ts          edge-covering chain/cycle decomposition
     nearest.ts            exact reference scan
-    routing.ts            path results and costs
+    routing.ts            Graphology pathfinding adapter, results and costs
   adapters/
     flatten.ts            explicit geometry conversion/import
     graphology.ts         detached conversion and validated import
@@ -1312,23 +1366,24 @@ regressions have tests. User IDs are never silently rewritten.
 
 ### Phase 3 — Migrate traversal, nearest, and routing
 
-**Implementation status (2026-10-10):** Library gate passed: traversal, indexed/reference nearest and routing differential tests pass. The real company application gate remains external.
+**Implementation status (2026-10-10):** Library gate passed: traversal, indexed/reference nearest and routing differential tests pass. Real company application migration is separate work, not a library release gate.
 
-Deliver: key-based traversal, head-index BFS, exact nearest scan, structured
+Deliver: key-based traversal, Graphology DFS components, exact nearest scan, structured
 paths, length versus cost separation, and custom costs if supported by the
 selected routing implementation. Update every example and recipe.
 
 Gate: decomposition covers each edge once, components partition nodes, nearest
-geometry agrees with a reference, and routing matches reference costs. The
-company project runs through its representative editing/routing flows.
+geometry agrees with a reference, and routing matches reference costs.
+Representative consumer fixtures cover editing flows; the actual company project
+may migrate after library release.
 
 ### Phase 4 — Complete the coordinated 2.0 delivery
 
 **Implementation status (2026-10-10):** Repository delivery gate passed. Package version is 2.0.0 on this development branch; no tag, npm publication or real consumer migration was performed.
 
 Deliver: explicit public exports, removal of application assumptions, dependency
-compatibility checks, documentation/API reference, package validation, and
-consumer migration. Update `AGENTS.md` to replace tuple-only and inheritance
+compatibility checks, documentation/API reference, and package validation.
+Consumer migration may follow release. Update `AGENTS.md` to replace tuple-only and inheritance
 guidance with the new coordinate/element contracts. Update `README.md`,
 `llms.txt`, affected examples, and recipe tests in the same implementation change.
 
@@ -1445,9 +1500,15 @@ independent stored JSON/history. Use its fixtures to protect those behaviors;
 resolve the five remaining external questions before changing affected consumer
 flows. Composition, five classifications, exact precision default, and result shapes
 are implemented. External consumer assumptions still need verification in that
-project before release.
+project during its migration. Per the owner's release decision, application
+migration does not gate publication and may use the released 2.0 package.
 
 ## 16. Implementation status and validation
+
+For the later review of consumer/contributor instructions and executable examples,
+see [Examples and agent-readiness audit](agent-readiness-audit.md). It documents
+the expanded example learning path and automatic README/llms snippet checks.
+The six-example validation count below records the original implementation run.
 
 The repository now exposes the redesigned `SpatialGraph` directly. There is one
 Graphology adjacency store, protected by ECMAScript private fields, plus derived
@@ -1462,16 +1523,39 @@ for implicit endpoints; required metadata arguments cannot be omitted. Coordinat
 options are read-only at runtime. Top-level snapshot data is copied/frozen;
 clone hooks provide nested isolation. Callback failures are evaluated during
 planning before live mutations, including returned snapshots' clone hooks.
+`fromJSON` and `fromGraphology` block inference of metadata from their option
+arguments with `NoInfer`, matching the constructor. Policy-only imports use
+default metadata types without requiring a factory; explicit required schemas
+retain factory and attribute checks in ESM/CJS declarations.
+The inference-fix follow-up passes all seven repository checks, with 95 tests
+in 11 files and eleven asserting examples. The original validation counts below
+are historical, not the current suite size.
 
 | Area | Delivered behavior and evidence |
 | --- | --- |
 | Node/edge model | Five labels; canonical coordinate equality; retained snapshots; separate tuple collections; derived midpoint/length |
 | Editing | Batch insertion reports; simultaneous moves/swaps/chains; deterministic merges; strict split; safe join; explicit bend collapse; labels; copies/subgraphs/union |
 | Geometry/indexes | Exact projection, stable insertion-order nearest ties, incremental RBush updates, scan reference, crossing/T/overlap planarization, transitive nearby clusters |
-| Routing/traversal | Head-index components; edge-once chains/cycles; Dijkstra and reopening A*; custom nonnegative/zero/closed costs; geometric virtual routes |
+| Routing/traversal | Graphology DFS components; edge-once chains/cycles; Graphology shortest-path Dijkstra and reopening A*; custom nonnegative/zero/closed costs; geometric virtual routes |
 | Persistence | Version-2 spatial JSON, validated replace/merge imports, explicit legacy migration with collision reports, detached Graphology, straight Flatten, Cartesian GeoJSON |
 | Consumer fixtures | Integer-grid load/save adapter with typed width/IDs/labels; move, merge, split/connect, join/collapse and producer-rounding acceptance flows |
 | Package | ESM/CJS and both declaration formats, unchanged files allowlist, bundled RBush/quickselect notices, Graphology 0.26 integration |
+
+The routing follow-up replaces the original custom search with
+`graphology-shortest-path` and introduces the public `PathAlgorithm` enum.
+Ordinary searches use private adjacency; closed-edge and virtual queries use
+temporary copies. Existing A* reopening and generated differential regressions
+remain in place, with additional closure, zero-cost, overflow, and virtual
+projection cases. The counts below record the original implementation run.
+
+The component follow-up removes local BFS and calls
+`graphology-components.connectedComponents` directly on private adjacency,
+without exporting or copying the graph. Results become DFS-ordered snapshots;
+isolated nodes and empty-graph results are preserved. The consumer inventory
+records the effect on traversal-based labels, and a regression covers ordering,
+disconnected groups, snapshots, and unchanged query state. Local decomposition
+still covers every edge once in maximal degree-2 chains/cycles, a different
+contract from Graphology's simple-path enumeration.
 
 Repository validation on Node 24.14.0, Apple M1 Max/macOS arm64:
 
@@ -1499,7 +1583,8 @@ not a complete browser matrix. CI is configured for Node 22 and 24; the local
 run used Node 24. The actual company application is not available in this
 workspace, so its 44 importing files, real stored data, and application build
 have not been migrated or validated. The repository's representative fixtures
-pass, but do not replace that release gate. PR #17 remains open and its editor
+pass. Application migration is not a library release gate and may target the
+released 2.0 package. PR #17 remains open and its editor
 will need the same API migration if adopted. GitHub issue statuses are unchanged.
 
 ## Appendix A. Reproducing the main correctness probes

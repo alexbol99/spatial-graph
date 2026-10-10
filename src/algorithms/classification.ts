@@ -10,15 +10,23 @@ export function classifyNode<N extends object, E extends object>(
   straightAngleToleranceDeg: number,
 ): NodeType {
   const degree = graph.degree(key);
-  if (degree === 0) return 'isolated';
-  if (degree === 1) return 'stub';
-  if (degree > 2) return 'junction';
+  if (degree === 0) {
+    return 'isolated';
+  }
+  if (degree === 1) {
+    return 'stub';
+  }
+  if (degree > 2) {
+    return 'junction';
+  }
   const center = pointOf(graph.getNodeAttributes(key));
   const [aKey, bKey] = graph.neighbors(key);
   if (aKey === undefined || bKey === undefined) {
     throw new Error('Graph storage is inconsistent: a degree-2 node has fewer than two neighbors.');
   }
-  const directions = [aKey, bKey].map((neighbor) => vector(center, pointOf(graph.getNodeAttributes(neighbor))));
+  const directions = [aKey, bKey].map((neighbor) =>
+    vector(center, pointOf(graph.getNodeAttributes(neighbor))),
+  );
   const deviationDeg = 180 - angleDegrees(directions[0]!, directions[1]!);
   return deviationDeg <= straightAngleToleranceDeg ? 'intermediate' : 'corner';
 }

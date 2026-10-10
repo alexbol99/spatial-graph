@@ -1,32 +1,42 @@
-import { MinHeap } from '../internal/heap.js';
-export interface SearchLink { to: string; edge: string; cost: number }
-/** Dijkstra/A* with reopening and stable ties. Callers validate all weights and heuristics. */
+import type { AbstractGraph } from 'graphology-types';
+import { astar, dijkstra, edgePathFromNodePath } from 'graphology-shortest-path';
+import { PathAlgorithm } from '../types.js';
+
+/** Delegate pathfinding to Graphology; adapt closed edges and validate the resulting cost. */
 export function shortestPath(
-  start: string, goal: string, neighbors: (key: string) => readonly SearchLink[], heuristic: (key: string) => number,
+  graph: AbstractGraph,
+  start: string,
+  goal: string,
+  costs: ReadonlyMap<string, number | null>,
+  algorithm: PathAlgorithm = PathAlgorithm.Dijkstra,
+  heuristics: ReadonlyMap<string, number> = new Map(),
 ): { nodes: string[]; edges: string[]; cost: number } | null {
-  const costs = new Map([[start, 0]]), previous = new Map<string, { node: string; edge: string }>();
-  const queue = new MinHeap<{ key: string; cost: number }>();
-  queue.push({ key: start, cost: 0 }, heuristic(start));
-  while (queue.size) {
-    const current = queue.pop()!.value;
-    if (current.cost !== costs.get(current.key)) continue;
-    if (current.key === goal) {
-      const nodes = [goal], edges: string[] = [];
-      let cursor = goal;
-      while (cursor !== start) {
-        const entry = previous.get(cursor)!;
-        edges.push(entry.edge); nodes.push(entry.node); cursor = entry.node;
-      }
-      return { nodes: nodes.reverse(), edges: edges.reverse(), cost: current.cost };
-    }
-    for (const link of neighbors(current.key)) {
-      const cost = current.cost + link.cost;
-      if (!Number.isFinite(cost)) throw new RangeError('Route cost overflowed; reduce edge costs or coordinate scale.');
-      if (cost < (costs.get(link.to) ?? Infinity)) {
-        costs.set(link.to, cost); previous.set(link.to, { node: current.key, edge: link.edge });
-        queue.push({ key: link.to, cost }, cost + heuristic(link.to));
-      }
-    }
+  // Graphology's weight getter coerces null to 1. Remove closed edges from a
+  // copy rather than passing null through or mutating the original adjacency.
+  const closedEdges = [...costs].filter(([, cost]) => cost === null).map(([edge]) => edge);
+  const searchGraph = closedEdges.length > 0 ? graph.copy() : graph;
+
+  for (const edge of closedEdges) {
+    searchGraph.dropEdge(edge);
   }
-  return null;
+
+  const getCost = (edge: string): number => costs.get(edge)!;
+  const nodes: string[] | null =
+    algorithm === PathAlgorithm.AStar
+      ? astar.bidirectional(searchGraph, start, goal, getCost, (node) => heuristics.get(node) ?? 0)
+      : dijkstra.bidirectional(searchGraph, start, goal, getCost);
+
+  // Upstream declarations omit null even though both functions return it.
+  if (!nodes) {
+    return null;
+  }
+
+  const edges = edgePathFromNodePath(searchGraph, nodes);
+  const cost = edges.reduce((sum, edge) => sum + getCost(edge), 0);
+
+  if (!Number.isFinite(cost)) {
+    throw new RangeError('Route cost overflowed; reduce edge costs or coordinate scale.');
+  }
+
+  return { nodes, edges, cost };
 }

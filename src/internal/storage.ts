@@ -17,7 +17,10 @@ export interface StoredEdge<E extends object> {
 }
 
 /** Construct loop-free, simple Graphology storage. */
-export function createStorage<N extends object, E extends object>(): AbstractGraph<StoredNode<N>, StoredEdge<E>> {
+export function createStorage<N extends object, E extends object>(): AbstractGraph<
+  StoredNode<N>,
+  StoredEdge<E>
+> {
   const Graph = graphology as unknown as GraphConstructor<StoredNode<N>, StoredEdge<E>>;
   return new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
 }
@@ -31,11 +34,17 @@ export function nodeSnapshot<N extends object, E extends object>(
   cloneNode: (data: N) => N = copyData,
 ): SpatialNode<N> {
   const cached = cache?.get(key);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const record = graph.getNodeAttributes(key);
   const snapshot = new SpatialNode(
-    snapshotToken, key, [record.x, record.y], graph.degree(key),
-    classifyNode(graph, key, straightAngleToleranceDeg), cloneNode(record.data),
+    snapshotToken,
+    key,
+    [record.x, record.y],
+    graph.degree(key),
+    classifyNode(graph, key, straightAngleToleranceDeg),
+    cloneNode(record.data),
   );
   cache?.set(key, snapshot);
   return snapshot;
@@ -52,7 +61,8 @@ export function edgeSnapshot<N extends object, E extends object>(
 ): SpatialEdge<N, E> {
   const [source, target] = graph.extremities(key);
   return new SpatialEdge(
-    snapshotToken, key,
+    snapshotToken,
+    key,
     nodeSnapshot(graph, source, straightAngleToleranceDeg, cache, cloneNode),
     nodeSnapshot(graph, target, straightAngleToleranceDeg, cache, cloneNode),
     cloneEdge(graph.getEdgeAttributes(key).data),

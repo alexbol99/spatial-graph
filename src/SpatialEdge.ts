@@ -13,8 +13,16 @@ export class SpatialEdge<N extends object = NodeAttributes, E extends object = E
   readonly attributes: Readonly<E>;
 
   /** @internal Constructed by SpatialGraph; use graph.getEdge instead. */
-  constructor(token: symbol, key: string, source: SpatialNode<N>, target: SpatialNode<N>, attributes: E) {
-    if (token !== snapshotToken) throw new TypeError('Use graph.getEdge to obtain a SpatialEdge.');
+  constructor(
+    token: symbol,
+    key: string,
+    source: SpatialNode<N>,
+    target: SpatialNode<N>,
+    attributes: E,
+  ) {
+    if (token !== snapshotToken) {
+      throw new TypeError('Use graph.getEdge to obtain a SpatialEdge.');
+    }
     this.key = key;
     this.source = source;
     this.target = target;
@@ -35,8 +43,10 @@ export class SpatialEdge<N extends object = NodeAttributes, E extends object = E
 
   /** Compare endpoint positions regardless of orientation or Graphology edge key. */
   equals(other: SpatialEdge<N, E>): boolean {
-    return (this.source.key === other.source.key && this.target.key === other.target.key)
-      || (this.source.key === other.target.key && this.target.key === other.source.key);
+    return (
+      (this.source.key === other.source.key && this.target.key === other.target.key) ||
+      (this.source.key === other.target.key && this.target.key === other.source.key)
+    );
   }
 
   /** Create an independent Flatten segment. */

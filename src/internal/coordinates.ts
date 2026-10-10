@@ -8,18 +8,29 @@ export function validatePrecision(precision: CoordinatePrecision): void {
 
 /** Normalize a graph coordinate, rejecting values that cannot be represented. */
 export function canonicalPoint(point: Point2D, precision: CoordinatePrecision): Point2D {
-  if (!Array.isArray(point) || point.length !== 2) throw new TypeError('Point must be a two-number [x, y] tuple.');
+  if (!Array.isArray(point) || point.length !== 2) {
+    throw new TypeError('Point must be a two-number [x, y] tuple.');
+  }
   const [x, y] = point;
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     throw new RangeError('Point coordinates must be finite numbers; pass a finite [x, y] tuple.');
   }
-  if (precision === null) return [x === 0 ? 0 : x, y === 0 ? 0 : y];
+  if (precision === null) {
+    return [x === 0 ? 0 : x, y === 0 ? 0 : y];
+  }
 
   const factor = 10 ** precision;
   const scaledX = x * factor;
   const scaledY = y * factor;
-  if (!Number.isFinite(scaledX) || !Number.isFinite(scaledY) || Math.abs(scaledX) > Number.MAX_SAFE_INTEGER || Math.abs(scaledY) > Number.MAX_SAFE_INTEGER) {
-    throw new RangeError('Point cannot be quantized at coordinatePrecision; use smaller coordinates or a lower precision.');
+  if (
+    !Number.isFinite(scaledX) ||
+    !Number.isFinite(scaledY) ||
+    Math.abs(scaledX) > Number.MAX_SAFE_INTEGER ||
+    Math.abs(scaledY) > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new RangeError(
+      'Point cannot be quantized at coordinatePrecision; use smaller coordinates or a lower precision.',
+    );
   }
   const nx = Math.round(scaledX) / factor;
   const ny = Math.round(scaledY) / factor;
@@ -34,7 +45,9 @@ export function pointKey(point: Point2D): string {
 /** Strict legacy/reference parsing; routine geometry reads the stored coordinates. */
 export function parseKey(key: string): Point2D {
   const number = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?';
-  if (typeof key !== 'string' || !new RegExp(`^${number},${number}$`).test(key)) throw new Error('Malformed node key; use getNodeKey([x, y]) to construct a coordinate key.');
+  if (typeof key !== 'string' || !new RegExp(`^${number},${number}$`).test(key)) {
+    throw new Error('Malformed node key; use getNodeKey([x, y]) to construct a coordinate key.');
+  }
   const [x, y] = key.split(',').map(Number) as [number, number];
   return canonicalPoint([x, y], null);
 }

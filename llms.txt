@@ -1,111 +1,411 @@
 # @flatten-js/spatial-graph 2.0
 
-A 2D simple undirected graph using private Graphology storage and RBush
-candidate indexes. Node positions are Cartesian Point2D tuples. Public graph
-queries return immutable SpatialNode/SpatialEdge snapshots, with no graph pointer.
+> A 2D simple undirected Cartesian graph with private Graphology storage and
+> mutable RBush candidate indexes. Nodes are coordinates; edges are straight
+> segments. Queries return immutable SpatialNode/SpatialEdge snapshots.
 
-Install @flatten-js/spatial-graph and peer @flatten-js/core. ESM/CJS declarations
-ship for Node.js 22+. Raw TypeScript examples require Node 22.18+.
+## Read this first
+
+This file describes the 2.0 API. Inspect the installed package version before
+using these recipes in a 1.x project; 2.0 includes breaking changes.
+
+Install @flatten-js/spatial-graph and its peer @flatten-js/core. ESM and CommonJS
+are supported on Node.js 22+. Import from the package root only. For consumers,
+this file, README.md, and dist/index.d.ts (ESM) / dist/index.d.cts (CJS) ship in the
+package; examples/, docs/, AGENTS.md and CLAUDE.md are repository-only material.
+Use the declarations to resolve exact overloads and generic result types.
+For contributors, AGENTS.md supplies repository commands and conventions;
+CLAUDE.md imports that same file. Source examples need Node.js 22.18+.
+
+## Elements, identity, and current state
+
+<!-- example: snapshots.ts -->
 
 ```ts
 import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+// Coordinates identify nodes; queries return values captured at the time of query.
 const graph = new SpatialGraph();
-graph.addEdge([[0, 0], [10, 0]], {label: 'link'});
-graph.addEdge([[10, 0], [10, 10]]);
+graph.addEdge(
+  [
+    [0, 0],
+    [10, 0],
+  ],
+  { label: 'link' },
+);
+graph.addEdge([
+  [10, 0],
+  [10, 10],
+]);
+
 const node = graph.getNode([10, 0]);
-node?.type; // corner
 const edge = graph.getEdgeBetween([0, 0], [10, 0]);
-edge?.midpoint; // [5, 0]
-edge?.length; // 10
-if (node) {
+if (node && edge) {
+  node.type; // 'corner'
+  edge.midpoint; // [5, 0]
+  edge.length; // 10
   graph.moveNode(node, [12, 0]);
-  node.point; // retained [10, 0]
+  node.point; // retained snapshot: [10, 0]
   graph.getNode([10, 0]); // null
+  graph.getNode([12, 0]); // fetch the current snapshot
 }
 ```
 
-## Contracts
+- Point2D = readonly [x, y]; Segment2D = readonly [Point2D, Point2D]. A coordinate
+  value does not imply membership. NodeInput/EdgeInput also accept snapshots.
+  A snapshot input resolves its stored coordinates against CURRENT membership.
+  Snapshots contain no graph pointer and have no mutation methods.
+- Exact finite coordinates are the default. coordinatePrecision: 0 opts into
+  the old integer grid; integers 0..15 quantize with Math.round and normalize -0.
+  Scaled coordinate magnitudes must not exceed Number.MAX_SAFE_INTEGER before
+  rounding. Use graph.getNodeKey(point), never build or parse keys in user code.
+- Coordinates define same-graph node equality. node.equals(other) compares keys;
+  node.distanceTo(other) returns Euclidean distance. Edge equality compares
+  undirected endpoints. Removing/recreating at one position compares equal.
+  Cross-graph equality is outside the contract; ownership is not runtime-checked.
+- Moving removes/recreates or merges positions. Retained snapshots do not follow
+  the move; refetch by the destination. Metadata changes also require refetching.
+- Snapshot coordinates and top-level attributes are copied/frozen. Nested values
+  stay shared by default. cloneNodeAttributes/cloneEdgeAttributes isolate them.
+- Classification: isolated=degree 0, stub=1, intermediate=straight degree 2,
+  corner=bent degree 2, junction=3+. straightAngleToleranceDeg defaults to 1e-7
+  degrees; positionTolerance defaults to 1e-9 graph units. Neither changes equality.
+- Geometry crossings do not automatically create connectivity; call planarize()
+  or splitEdge() to create the nodes. No faces or native curved edges are exposed.
 
-- Point2D = readonly [x,y]; Segment2D = readonly [Point2D,Point2D]. NodeInput and
-  EdgeInput also accept same-graph snapshots resolved against current membership.
-- Exact finite coordinates are default. coordinatePrecision 0 opts into the old
-  integer grid; 0..15 quantizes decimals with Math.round and normalizes -0.
-  Scaled values must remain safe integers. Use getNodeKey, never build keys manually.
-- Coordinates define node equality within one graph. Moving removes/recreates or
-  merges destinations. Snapshot equality ignores metadata and object identity.
-- Snapshot coordinates/top-level attributes are copied and frozen. Nested data
-  remains shared unless cloneNodeAttributes/cloneEdgeAttributes hooks are supplied.
-- Classification: isolated=0, stub=1, intermediate=straight degree 2,
-  corner=bent degree 2, junction=3+. straightAngleToleranceDeg defaults to 1e-7;
-  positionTolerance defaults to 1e-9. Tolerances never affect equality.
-- Metadata cannot override geometry. User weight remains data; default routing
-  uses derived length. Required generic node fields require createNodeAttributes;
-  required attribute arguments cannot be omitted. Label setters preserve declared
-  string unions; null removal requires an undefined-compatible label. Graph
-  metadata has its own API.
-- Missing scalar/element queries return null, collections [], membership/removal
-  false. Bad input throws before mutation. Move of a missing node throws.
-- addEdge/addEdges report added/existing/collapsed; duplicate metadata is retained.
-  addNode upserts. mergeNodeAttributes updates existing nodes only.
-- moveNodes is simultaneous and atomic for invalid inputs. Destination metadata
-  wins, then smallest canonical source key. Edge conflicts use original endpoint
-  pairs. Conflict callbacks execute during planning and cannot mutate the graph.
-- splitEdge validates exact and canonical containment; missing/endpoint splits
-  are no-ops. IDs are copied, never rewritten. splitAttributes customizes them.
-- joinNode preserves straight degree-2 geometry and rejects existing neighbor
-  edges; collapseDegree2Node explicitly permits changing bends/triangles.
-- findPaths covers every edge once and includes cycles. Components include isolated
-  nodes. findTerminalPaths measures degree within the induced subset.
+## Metadata and result shapes
 
-## Recipes
+<!-- example: metadata.ts -->
 
 ```ts
-const path = graph.getShortestPath([0, 0], [12, 0], {algorithm: 'astar'});
-const length = path?.length;
-const nearest = graph.findNearestEdge([4, 3]);
-if (nearest) {
-  graph.splitEdge(nearest.edge, nearest.point);
-  graph.addEdge([[4, 3], nearest.point]);
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+interface NodeData {
+  name: string;
 }
-const report = graph.planarize();
-for (const node of graph.getNodesByType('intermediate')) graph.joinNode(node);
-const restored = SpatialGraph.fromJSON(JSON.parse(JSON.stringify(graph.export())));
-const detached = graph.toGraphology();
-const imported = SpatialGraph.fromGraphology(detached);
+interface EdgeData {
+  width: number;
+  weight?: number;
+  label?: 'main' | 'secondary';
+}
+
+// Edges and splits create nodes implicitly, so required node fields need a factory.
+const graph = new SpatialGraph<NodeData, EdgeData>({
+  createNodeAttributes: () => ({ name: '' }),
+});
+const inserted = graph.addEdge(
+  [
+    [0, 0],
+    [10, 0],
+  ],
+  { width: 3, weight: 999 },
+);
+if (inserted.status !== 'collapsed') {
+  const width: number = inserted.edge.attributes.width;
+  graph.mergeEdgeAttributes(inserted.edge, { width: width + 1 });
+  graph.setEdgeLabel(inserted.edge, 'main');
+}
 ```
 
-Nearest results include exact point, distance, t (source-to-target), and clamped.
-RBush lower-bound search evaluates exact geometry; ties follow insertion order.
-Use {scan:true} for the reference. Empty graphs return null. All geometry edits
-update indexes; metadata edits do not.
+Geometry and user attributes are separate. User x/type/length/weight fields do
+not override node position, classification, or routing length. Required generic
+node fields require createNodeAttributes for implicit endpoints and split nodes;
+required attribute arguments cannot be omitted. Label setters retain string
+unions; null removal requires an undefined-compatible label. Graph metadata uses
+getGraphAttribute/setGraphAttribute/getGraphAttributes/replaceGraphAttributes.
 
-Routing defaults to Dijkstra/length. Cost callbacks return finite nonnegative
-numbers or null to close an edge. A* supports reopening; custom heuristics must
-be admissible, finite, nonnegative, zero at destination. Default A* heuristic is
-Euclidean for length, zero for custom costs. Length and cost are independent.
-route(fromPoint,toPoint,{maxSnapDistance}) returns virtual traversal points and
-snap results, uses geometric cost, and does not modify graph/revision.
+| Operation | Result / absent case |
+| --- | --- |
+| getNode/getEdge/getEdgeBetween, element geometry/metadata getters | Snapshot/value or null |
+| getNeighbors and subset collection queries | Array, empty when there are no matches |
+| hasNode/hasEdge | boolean |
+| removeNode/removeEdge/removeStubNode | boolean; false when absent or ineligible |
+| removeNodes/removeEdges | Number removed; 0 when none |
+| getGraphAttribute | Value or undefined |
+| addNode | Snapshot; upserts supplied metadata |
+| addEdge | {status: 'added' or 'existing', edge, endpoints}, or {status: 'collapsed', edge: null, endpoints} |
+| addEdges | {results, added, existing, collapsed}; results follow input order |
+| moveNode/moveNodes/mergeNodeInto | MutationReport, not the moved node |
+| splitEdge/joinNode/collapseDegree2Node | Report with changed/reason and resulting elements |
+| mergeNodeAttributes/mergeEdgeAttributes | Updated snapshot or null; never creates an element |
+| getShortestPath/route | Structured result or null |
 
-Planarize handles crossings/T-junctions/overlaps. Unrepresentable grid crossings
-return unresolved points without editing. mergeNearbyNodes forms transitive
-clusters with canonical representatives; maxDisplacement can exceed tolerance.
+Invalid coordinates/options/callback results throw before mutation. Missing move
+sources throw. Duplicate edge insertion preserves existing metadata; collapsed
+edges create no endpoints. Node/edge counts and revision are read-only properties.
 
-Spatial JSON schema='spatial-graph', version=2 includes options, explicit nodes,
-edges, metadata. Metadata must be JSON-compatible for JSON.stringify round trips.
-import replaces by default; {merge:true} uses matching policies and union rules.
-fromLegacyJSON(data,{coordinatePrecision:0}) returns {graph,report} with collisions
-and collapsed edge counts; legacy weight stays metadata.
+Moves are simultaneous, including swaps. Destination metadata wins, then the
+smallest canonical source key; edge conflicts use original endpoint pairs.
+Custom merge callbacks run during planning and cannot mutate the graph.
+splitEdge validates exact AND canonical containment; missing/endpoint splits
+are no-ops, off-edge splits throw. Metadata IDs are copied, never rewritten;
+splitAttributes can supply application IDs. joinNode requires a straight degree-2
+node without an existing neighbor edge; collapseDegree2Node explicitly permits
+changing bends/triangles. Inspect the operation's report before using its elements.
 
-Graphology adapters are detached O(V+E) copies with top-level x/y and length and
-nested data. fromGraphology validates topology/geometry and accepts metadata
-mapping callbacks. Internal routing uses private Graphology directly.
-Flatten methods explicitly contain Flatten in their names. Segments and straight
-Multilines are supported; unsupported arcs/rays/lines throw before insertion.
+## Traversal
+
+`bfs(callback)` and `dfs(callback)` visit the whole graph, including isolated
+nodes. `bfsFromNode(node, callback)` and `dfsFromNode(node, callback)` visit only
+nodes reached from a tuple or snapshot; a missing start makes no visits. All
+four return `void` and delegate to `graphology-traversal` on private adjacency.
+
+Visitors receive `(SpatialNode, depth)`, with metadata on `node.attributes`.
+BFS depth counts hops through the explored graph; DFS depth is discovery depth,
+not minimum distance. Each traversal root starts at depth zero. Returning `true`
+skips expansion of the current node; it does not cancel the traversal or visits
+already queued. Whole-graph traversal may later start a new root among nodes
+left unseen by pruning. Visitors must be synchronous and cannot mutate the graph
+or start nested traversals. Ordinary reads such as `getNode()` are allowed.
+Direction-mode options are omitted because SpatialGraph is undirected.
+
+<!-- example: traversal.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+import type { Point2D } from '@flatten-js/spatial-graph';
+
+const graph = new SpatialGraph();
+graph.addEdge([
+  [0, 0],
+  [1, 0],
+]);
+graph.addEdge([
+  [0, 0],
+  [0, 1],
+]);
+graph.addEdge([
+  [1, 0],
+  [2, 0],
+]);
+graph.addNode([99, 99]); // Isolated nodes are included by whole-graph traversals.
+
+const breadth: Array<[Point2D, number]> = [];
+graph.bfsFromNode([0, 0], (node, depth) => {
+  breadth.push([node.point, depth]);
+  return depth >= 1; // Skip expansion here; other queued nodes are still visited.
+});
+const depthFirst: Point2D[] = [];
+graph.dfsFromNode(graph.getNode([0, 0])!, (node) => {
+  depthFirst.push(node.point);
+});
+let breadthCount = 0;
+let depthCount = 0;
+graph.bfs(() => {
+  breadthCount++;
+});
+graph.dfs(() => {
+  depthCount++;
+});
+```
+
+## Routing
+
+getConnectedComponents() delegates directly to graphology-components on private
+adjacency. It returns SpatialNode snapshot groups in Graphology DFS discovery
+order, includes isolated nodes, and returns [] for an empty graph. This replaces
+BFS node order; traversal-based labelling may change. A component is not a route.
+
+<!-- example: routing.ts -->
+
+```ts
+import { PathAlgorithm, SpatialGraph } from '@flatten-js/spatial-graph';
+
+// Two alternatives: a short direct edge and a longer, cheaper detour.
+const graph = new SpatialGraph();
+graph.addEdges([
+  {
+    endpoints: [
+      [0, 0],
+      [20, 0],
+    ],
+    attributes: { fare: 10 },
+  },
+  {
+    endpoints: [
+      [0, 0],
+      [0, 10],
+    ],
+    attributes: { fare: 1 },
+  },
+  {
+    endpoints: [
+      [0, 10],
+      [20, 10],
+    ],
+    attributes: { fare: 1 },
+  },
+  {
+    endpoints: [
+      [20, 10],
+      [20, 0],
+    ],
+    attributes: { fare: 1 },
+  },
+]);
+const path = graph.getShortestPath([0, 0], [20, 0], { algorithm: PathAlgorithm.AStar });
+const length = path?.length; // 20; missing/disconnected endpoints yield null.
+```
+
+PathAlgorithm.Dijkstra/derived length is the default; use PathAlgorithm.AStar
+for A*. Import PathAlgorithm from the package root rather than spelling algorithm
+strings. Both delegate to graphology-shortest-path; the spatial wrapper handles
+validation and results. Cost callbacks return finite nonnegative
+numbers or null to close an edge; zero is valid. Length and cost are independent.
+A* supports reopening. Custom heuristics must be admissible, finite, nonnegative,
+and zero at destination; admissibility is the caller's responsibility. Default A*
+heuristic is Euclidean for length, zero for custom costs. Built-in routing accesses
+the private graph directly and requires no toGraphology() call. Closed edges
+are removed from a temporary copy, avoiding upstream null-weight coercion.
+
+route(fromPoint, toPoint, {maxSnapDistance}) is nonmutating geometric routing
+between exact nearest projections. It returns points, length, cost, from/to snap
+results. Access distances are in from.distance/to.distance and are excluded from
+length/cost. A temporary Graphology copy with projection nodes adds O(V+E)
+time and space per query before search. This method does not accept custom
+partial-edge costs.
+
+## Snap and connect
+
+<!-- example: snap-and-connect.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+// Split first to make the projection a connected graph node, then add the spur.
+const graph = new SpatialGraph();
+graph.addEdge([
+  [0, 0],
+  [20, 0],
+]);
+const site = [4, 3] as const;
+const nearest = graph.findNearestEdge(site);
+if (nearest) {
+  graph.splitEdge(nearest.edge, nearest.point);
+  graph.addEdge([site, nearest.point]);
+}
+```
+
+Nearest edge results include edge, exact point, distance, t (source-to-target),
+and clamped. RBush search uses bounding-box lower bounds and exact distances;
+ties follow insertion order. {scan: true} selects the reference. Empty graphs
+return null. Geometry edits update indexes; metadata edits leave them unchanged.
+On a quantized graph, an exact projection may round OFF its edge. splitEdge then
+throws before mutation; use representable on-edge points or an exact policy.
+
+## Connectivity and cleanup
+
+<!-- example: planarize.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+// Geometric crossings alone do not create adjacency. Planarize splits ALL cuts.
+const graph = new SpatialGraph();
+graph.addEdges([
+  {
+    endpoints: [
+      [0, 0],
+      [10, 10],
+    ],
+    attributes: {},
+  },
+  {
+    endpoints: [
+      [0, 10],
+      [10, 0],
+    ],
+    attributes: {},
+  },
+  {
+    endpoints: [
+      [0, 2],
+      [10, 2],
+    ],
+    attributes: {},
+  },
+]);
+const disconnected = graph.getShortestPath([0, 0], [0, 2]); // null
+const report = graph.planarize();
+```
+
+Planarize handles crossings/T-junctions/overlap boundaries. Unrepresentable grid
+crossings return unresolved points without editing. It is idempotent for
+representable intersections. Connected components include isolates. findPaths
+covers each edge once, including cycles; findTerminalPaths measures degree in
+its induced subset. joinNode preserves shape; cleanup policies such as discarding
+small components or repeatedly pruning stubs belong to the application.
+mergeNearbyNodes forms transitive clusters with canonical representatives;
+maxDisplacement can exceed tolerance. fromPoints uses a caller's connection rule
+on every pair of canonical coordinates (O(n²)); it does not merge positions.
+
+## Persistence and adapters
+
+<!-- example: save-and-load.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+// Spatial JSON is the persistence format: geometry, keys, policies, and metadata.
+const graph = new SpatialGraph({ coordinatePrecision: 0 });
+graph.addEdge(
+  [
+    [0, 0],
+    [10, 0],
+  ],
+  { name: 'first' },
+);
+graph.addEdge(
+  [
+    [10, 0],
+    [10, 10],
+  ],
+  { name: 'second' },
+);
+graph.setNodeLabel([0, 0], 'origin');
+graph.setGraphAttribute('name', 'network');
+const restored = SpatialGraph.fromJSON(JSON.parse(JSON.stringify(graph.export())));
+```
+
+Spatial JSON schema='spatial-graph', version=2 includes policies, explicit geometry,
+keys and graph/node/edge metadata. Values must be JSON-compatible for lossless
+JSON.stringify round trips. Callback functions are not serialized; supply factories
+and clone hooks when restoring a typed graph. import replaces by default;
+{merge: true} uses union rules and requires matching policies.
+fromLegacyJSON(data, {coordinatePrecision: 0}) returns {graph, report} with
+collision/collapse counts. Legacy weight remains metadata.
+
+Graphology adapters are detached O(V+E) topology copies: top-level x/y and length,
+nested data. Nested values follow the shallow-copy/clone-hook convention.
+toGraphology currently omits graph-level metadata and spatial policies/factories;
+copy graph attributes explicitly and pass policies when importing, if needed.
+fromGraphology rejects directed/multi/looped graphs and normalization collisions,
+validates x/y, and accepts metadata mapping callbacks. Export anew after edits
+for external algorithms. SpatialGraph itself has no inherited Graphology API.
+fromGraphology and fromJSON default to NodeAttributes/EdgeAttributes; policy
+options do not infer metadata types or require an unrelated factory. Supply
+explicit generics for custom metadata schemas, as with the constructor. Required
+custom node fields still require createNodeAttributes. See save-and-load.ts.
+
+Flatten adapter names explicitly include Flatten; snapshots expose
+toFlattenPoint()/toFlattenSegment(). Segments and straight Multilines are
+supported; unsupported arcs/rays/lines throw before batch insertion.
 fromGeoJSON accepts Point/LineString/MultiLineString features, maps properties to
-metadata, and rejects extra dimensions unless dropExtraDimensions is set.
-Supply onReport to inspect insertion outcomes, including precision collapses.
-toGeoJSON emits per-edge LineStrings plus isolated Points, without geodesic claims.
+metadata, rejects extra dimensions unless dropExtraDimensions is explicit, and
+accepts onReport for precision collapses. Geometry is Cartesian, not geodesic.
+toGeoJSON emits edge LineStrings plus isolated Points; connected node metadata
+is absent from that format. Use spatial JSON when that metadata must survive.
 
-Full API, runnable asserting recipes, and migration guidance: README.md,
-examples/, docs/library-refactoring-audit.md. 1.x NxPoint/NxEdge and raw inherited
-Graphology methods were removed; use tuples for geometry and snapshots for members.
+## Further reading
+
+- [Package README](README.md): API groups, installation, migration and release commands.
+- [ESM declarations](dist/index.d.ts) / [CJS declarations](dist/index.d.cts): exact public signatures.
+- In a source checkout, [examples guide](examples/README.md) maps tasks to ten
+  asserting programs; [AGENTS.md](AGENTS.md) defines contributor conventions.
+- Repository-only [refactoring audit](docs/library-refactoring-audit.md) records
+  design rationale; [agent-readiness audit](docs/agent-readiness-audit.md) records
+  documentation evidence and limitations. These are not installed package files.
+
+1.x NxPoint/NxEdge and inherited Graphology calls were removed. Use Point2D/
+Segment2D for geometry and snapshots for elements; use explicit adapters for
+Graphology and Flatten. coordinatePrecision: 0 preserves old integer-grid identity.

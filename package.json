@@ -75,6 +75,9 @@
   },
   "dependencies": {
     "graphology": "^0.26.0",
+    "graphology-components": "^1.5.4",
+    "graphology-shortest-path": "^2.1.0",
+    "graphology-traversal": "^0.3.1",
     "graphology-types": "^0.24.8",
     "rbush": "^4.0.1"
   },

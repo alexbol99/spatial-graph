@@ -23,8 +23,17 @@ export interface StoredNetwork {
   }>;
 }
 
-export interface ConsumerNode { label?: string; id?: string }
-export interface ConsumerEdge { width: number; label?: string; id?: string; type?: string; key?: string }
+export interface ConsumerNode {
+  label?: string;
+  id?: string;
+}
+export interface ConsumerEdge {
+  width: number;
+  label?: string;
+  id?: string;
+  type?: string;
+  key?: string;
+}
 export type ConsumerGraph = SpatialGraph<ConsumerNode, ConsumerEdge>;
 
 export const DEFAULT_WIDTH = 140;
@@ -37,22 +46,30 @@ export function readFixture<T = StoredNetwork>(name: string): T {
 
 /** Load a stored network the way the consumer does: one segment per coordinate pair. */
 export function loadStored(stored: StoredNetwork): ConsumerGraph {
-  const records: Array<{endpoints: Segment2D; attributes: ConsumerEdge}> = [];
+  const records: Array<{ endpoints: Segment2D; attributes: ConsumerEdge }> = [];
 
   for (const edge of stored.edges) {
     const { coords, corridor_width: rawWidth, label } = edge.attributes;
-    if (coords.length < 2) continue;
+    if (coords.length < 2) {
+      continue;
+    }
     const width = typeof rawWidth === 'number' && rawWidth > 0 ? rawWidth : DEFAULT_WIDTH;
 
     for (let i = 0; i < coords.length - 1; i += 1) {
       const [x1, y1] = coords[i]!;
       const [x2, y2] = coords[i + 1]!;
-      records.push({endpoints: [[x1,y1],[x2,y2]], attributes: {
-        type: 'skeleton',
-        key: edge.key,
-        width,
-        ...(i === 0 && label ? { label } : {}),
-      }});
+      records.push({
+        endpoints: [
+          [x1, y1],
+          [x2, y2],
+        ],
+        attributes: {
+          type: 'skeleton',
+          key: edge.key,
+          width,
+          ...(i === 0 && label ? { label } : {}),
+        },
+      });
     }
   }
 
@@ -62,7 +79,9 @@ export function loadStored(stored: StoredNetwork): ConsumerGraph {
 
   for (const node of stored.nodes ?? []) {
     const { x, y, label } = node.attributes;
-    if (label && Number.isFinite(x) && Number.isFinite(y)) graph.setNodeLabel([x, y], label);
+    if (label && Number.isFinite(x) && Number.isFinite(y)) {
+      graph.setNodeLabel([x, y], label);
+    }
   }
   for (const attribute of [NEXT_NODE_LABEL_INDEX, NEXT_EDGE_LABEL_INDEX]) {
     const value = stored.attributes?.[attribute];
@@ -76,7 +95,7 @@ export function loadStored(stored: StoredNetwork): ConsumerGraph {
 
 /** Store a network the way the consumer does (the consumer format). */
 export function toStored(graph: ConsumerGraph): Required<StoredNetwork> {
-  const nodes = graph.getNodes().map(({point}) => {
+  const nodes = graph.getNodes().map(({ point }) => {
     const label = graph.getNodeLabel(point);
     return {
       key: graph.getNodeKey(point),
@@ -84,7 +103,7 @@ export function toStored(graph: ConsumerGraph): Required<StoredNetwork> {
     };
   });
 
-  const edges = graph.getEdges().map(({endpoints: edge}, index) => {
+  const edges = graph.getEdges().map(({ endpoints: edge }, index) => {
     const attrs = graph.getEdgeAttributes(edge);
     const stored = attrs?.width;
     const width = typeof stored === 'number' && stored > 0 ? stored : DEFAULT_WIDTH;
@@ -107,7 +126,9 @@ export function toStored(graph: ConsumerGraph): Required<StoredNetwork> {
   const attributes: Record<string, unknown> = {};
   for (const attribute of [NEXT_NODE_LABEL_INDEX, NEXT_EDGE_LABEL_INDEX]) {
     const value = graph.getGraphAttribute(attribute);
-    if (typeof value === 'number') attributes[attribute] = value;
+    if (typeof value === 'number') {
+      attributes[attribute] = value;
+    }
   }
 
   return { attributes, nodes, edges };
@@ -118,8 +139,16 @@ export function toStored(graph: ConsumerGraph): Required<StoredNetwork> {
  * across coordinate changes with these). Ids are not stored.
  */
 export function ensureEditingIds(graph: ConsumerGraph): void {
-  for (const node of graph.getNodes()) if (!node.attributes.id) graph.mergeNodeAttributes(node, {id: node.key});
-  for (const edge of graph.getEdges()) if (!edge.attributes.id) graph.mergeEdgeAttributes(edge, {id: edgeId(edge.endpoints)});
+  for (const node of graph.getNodes()) {
+    if (!node.attributes.id) {
+      graph.mergeNodeAttributes(node, { id: node.key });
+    }
+  }
+  for (const edge of graph.getEdges()) {
+    if (!edge.attributes.id) {
+      graph.mergeEdgeAttributes(edge, { id: edgeId(edge.endpoints) });
+    }
+  }
 }
 
 /** Order-independent text form of an edge, for assertions. */
