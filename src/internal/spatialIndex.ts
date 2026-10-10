@@ -12,12 +12,13 @@ interface Branch extends BBox {
   children: Array<Branch | IndexItem>;
 }
 
-export function bounds([a, b]: Segment2D): BBox {
+/** Segment bounds, optionally expanded to include tolerance-based candidates. */
+export function bounds([a, b]: Segment2D, padding = 0): BBox {
   return {
-    minX: Math.min(a[0], b[0]),
-    minY: Math.min(a[1], b[1]),
-    maxX: Math.max(a[0], b[0]),
-    maxY: Math.max(a[1], b[1]),
+    minX: Math.min(a[0], b[0]) - padding,
+    minY: Math.min(a[1], b[1]) - padding,
+    maxX: Math.max(a[0], b[0]) + padding,
+    maxY: Math.max(a[1], b[1]) + padding,
   };
 }
 

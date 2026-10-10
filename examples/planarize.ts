@@ -46,3 +46,20 @@ assert.equal(
   graph.edgeCount,
 );
 // See precision.ts for unresolved grid intersections and cleanup.ts for safe joins.
+
+// positionTolerance also applies when exact segment boxes have a small gap.
+// Planarization connects this nearby endpoint; coordinate identity itself stays exact.
+const near = new SpatialGraph();
+near.addEdge([
+  [0, 0],
+  [10, 0],
+]);
+near.addEdge([
+  [5, 5e-10],
+  [5, 5],
+]);
+assert.equal(near.getConnectedComponents().length, 2);
+assert.equal(near.planarize().changed, true);
+assert.equal(near.getNodeType([5, 5e-10]), 'junction');
+assert.equal(near.getConnectedComponents().length, 1);
+assert.equal(near.planarize().changed, false);

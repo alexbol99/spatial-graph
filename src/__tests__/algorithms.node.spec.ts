@@ -368,6 +368,51 @@ describe('RBush and exact geometry', () => {
     expect(overlap.getShortestPath([0, 0], [15, 0])!.length).toBe(15);
     expect(overlap.planarize().changed).toBe(false);
   });
+
+  it.each([
+    {
+      axis: 'horizontal',
+      base: [
+        [0, 0],
+        [10, 0],
+      ] as Segment2D,
+      branch: [
+        [5, 5e-10],
+        [5, 5],
+      ] as Segment2D,
+    },
+    {
+      axis: 'vertical',
+      base: [
+        [0, 0],
+        [0, 10],
+      ] as Segment2D,
+      branch: [
+        [5e-10, 5],
+        [5, 5],
+      ] as Segment2D,
+    },
+  ])('nodes a near-$axis T-junction only within positionTolerance', ({ base, branch }) => {
+    const graph = build([base, branch]);
+    expect(graph.getConnectedComponents()).toHaveLength(2);
+    expect(graph.planarize()).toMatchObject({ changed: true, overlaps: 0, unresolved: [] });
+    expect(graph.getNodeType(branch[0])).toBe('junction');
+    expect(graph.edgeCount).toBe(3);
+    expect(graph.nodeCount).toBe(4);
+    expect(graph.getConnectedComponents()).toHaveLength(1);
+    expect(graph.getShortestPath(base[0], branch[1])?.length).toBeCloseTo(10);
+    expect(graph.planarize().changed).toBe(false);
+
+    const strict = new SpatialGraph({ positionTolerance: 1e-10 });
+    strict.addEdges([base, branch].map((endpoints) => ({ endpoints, attributes: {} })));
+    const before = strict.export();
+    const revision = strict.revision;
+    expect(strict.planarize().changed).toBe(false);
+    expect(strict.export()).toEqual(before);
+    expect(strict.revision).toBe(revision);
+    expect(strict.getConnectedComponents()).toHaveLength(2);
+  });
+
   it('reports incompatible grid intersections without changing any edges', () => {
     const graph = new SpatialGraph({ coordinatePrecision: 0 });
     graph.addEdge([

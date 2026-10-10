@@ -1530,6 +1530,11 @@ retain factory and attribute checks in ESM/CJS declarations.
 The inference-fix follow-up passes all seven repository checks, with 95 tests
 in 11 files and eleven asserting examples. The original validation counts below
 are historical, not the current suite size.
+The release review expands planarization candidate bounds by positionTolerance
+so indexed filtering includes near T-junctions accepted by the geometry helper.
+Horizontal/vertical regressions cover within-tolerance connectivity, idempotence,
+and unchanged state under a stricter tolerance; the asserting planarization
+example also demonstrates the behavior.
 
 | Area | Delivered behavior and evidence |
 | --- | --- |

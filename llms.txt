@@ -329,7 +329,9 @@ const disconnected = graph.getShortestPath([0, 0], [0, 2]); // null
 const report = graph.planarize();
 ```
 
-Planarize handles crossings/T-junctions/overlap boundaries. Unrepresentable grid
+Planarize handles crossings/T-junctions/overlap boundaries. Candidate searches
+include positionTolerance, so a nearby endpoint within containment tolerance
+may become a shared junction. Unrepresentable grid
 crossings return unresolved points without editing. It is idempotent for
 representable intersections. Connected components include isolates. findPaths
 covers each edge once, including cycles; findTerminalPaths measures degree in
@@ -400,7 +402,7 @@ is absent from that format. Use spatial JSON when that metadata must survive.
 
 - [Package README](README.md): API groups, installation, migration and release commands.
 - [ESM declarations](dist/index.d.ts) / [CJS declarations](dist/index.d.cts): exact public signatures.
-- In a source checkout, [examples guide](examples/README.md) maps tasks to ten
+- In a source checkout, [examples guide](examples/README.md) maps tasks to eleven
   asserting programs; [AGENTS.md](AGENTS.md) defines contributor conventions.
 - Repository-only [refactoring audit](docs/library-refactoring-audit.md) records
   design rationale; [agent-readiness audit](docs/agent-readiness-audit.md) records

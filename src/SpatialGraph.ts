@@ -1298,6 +1298,7 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
   /**
    * Split crossings/T-junctions and overlaps atomically. Unrepresentable grid intersections return
    * unresolved points without mutation.
+   * Candidate bounds include positionTolerance; geometry is checked before planning cuts.
    */
   planarize(options: ConflictOptions<N, E> = {}): PlanarizeResult {
     return this.guarded(() => {
@@ -1309,7 +1310,9 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
       let overlaps = 0;
 
       for (const first of keys) {
-        for (const second of this.#edgeIndex.search(bounds(this.segment(first)))) {
+        for (const second of this.#edgeIndex.search(
+          bounds(this.segment(first), this.positionTolerance),
+        )) {
           if (first === second) {
             continue;
           }

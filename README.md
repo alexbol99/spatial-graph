@@ -303,6 +303,8 @@ const report = graph.planarize();
 Planarization is atomic and idempotent for representable intersections. Under a
 fixed grid, unrepresentable intersections are reported in `unresolved` without
 changing the graph. Overlap pieces use deterministic metadata merging.
+Candidate searches include `positionTolerance`: an endpoint within that distance
+of another edge may be used as their shared junction.
 `mergeNearbyNodes(tolerance)` forms transitive distance clusters and chooses the
 smallest canonical key as representative; its `maxDisplacement` may exceed the
 tolerance. Grid quantization and proximity clustering are different operations.
