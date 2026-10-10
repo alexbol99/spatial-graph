@@ -1,87 +1,62 @@
-import { Point, Segment, Vector } from '@flatten-js/core';
-import type { NxPoint, NxEdge } from '../types.js';
-import { COORDINATE_PRECISION } from '../constants.js';
+import type { Point2D, Segment2D, Vector2D } from '../types.js';
 
-/**
- * Round a point's coordinates to the specified precision
- */
-export function roundPoint(point: NxPoint): NxPoint {
-  const factor = Math.pow(10, COORDINATE_PRECISION);
-  return [Math.round(point[0] * factor) / factor, Math.round(point[1] * factor) / factor];
+export const vector = (from: Point2D, to: Point2D): Vector2D => [to[0] - from[0], to[1] - from[1]];
+
+export const distance = (a: Point2D, b: Point2D): number => Math.hypot(...vector(a, b));
+
+export const midpoint = ([a, b]: Segment2D): Point2D => [a[0] / 2 + b[0] / 2, a[1] / 2 + b[1] / 2];
+
+export const dot = (a: Vector2D, b: Vector2D): number => a[0] * b[0] + a[1] * b[1];
+
+export const cross = (a: Vector2D, b: Vector2D): number => a[0] * b[1] - a[1] * b[0];
+
+export const unit = (v: Vector2D): Vector2D => {
+  const length = Math.hypot(...v);
+  return [v[0] / length, v[1] / length];
+};
+
+/** Unsigned angle in [0,180]; normalization avoids overflowing cross/dot products. */
+export function angleDegrees(a: Vector2D, b: Vector2D): number {
+  const u = unit(a);
+  const v = unit(b);
+  return (Math.atan2(Math.abs(cross(u, v)), dot(u, v)) * 180) / Math.PI;
 }
 
-/**
- * Convert NxPoint to flatten-js Point
- */
-export function toFlattenPoint(point: NxPoint): Point {
-  return new Point(point[0], point[1]);
-}
+export const pointOf = (record: { x: number; y: number }): Point2D => [record.x, record.y];
 
-/**
- * Convert flatten-js Point to NxPoint, snapped to the graph's coordinate grid
- * (`COORDINATE_PRECISION`)
- */
-export function fromFlattenPoint(point: Point): NxPoint {
-  return roundPoint([point.x, point.y]);
-}
-
-/**
- * Convert NxEdge to flatten-js Segment
- */
-export function toFlattenSegment(edge: NxEdge): Segment {
-  return new Segment(toFlattenPoint(edge[0]), toFlattenPoint(edge[1]));
-}
-
-/**
- * Convert flatten-js Segment to NxEdge
- */
-export function fromFlattenSegment(segment: Segment): NxEdge {
-  return [fromFlattenPoint(segment.start), fromFlattenPoint(segment.end)];
-}
-
-/**
- * Calculate the angle between two segments using cross product
- * Returns angle in degrees
- */
-export function getLinesAngleByCross(seg1: Segment, seg2: Segment): number {
-  const v1 = new Vector(seg1.start, seg1.end);
-  const v2 = new Vector(seg2.start, seg2.end);
-
-  const cross = v1.cross(v2);
-  const dot = v1.dot(v2);
-
-  let angle = Math.atan2(Math.abs(cross), dot) * (180 / Math.PI);
-
-  // Normalize to 0-180 range
-  if (angle > 180) {
-    angle = 360 - angle;
+export function validateAngle(tolerance: number): void {
+  if (!Number.isFinite(tolerance) || tolerance < 0 || tolerance >= 90) {
+    throw new RangeError('Angle tolerance must be finite and in [0, 90).');
   }
-
-  return angle;
 }
 
-/**
- * Calculate the dot product of two segments
- */
-export function getLinesDot(seg1: Segment, seg2: Segment): number {
-  const v1 = new Vector(seg1.start, seg1.end);
-  const v2 = new Vector(seg2.start, seg2.end);
-
-  return v1.dot(v2);
+export function validateTolerance(tolerance: number): void {
+  if (!Number.isFinite(tolerance) || tolerance < 0) {
+    throw new RangeError('Position tolerance must be finite and nonnegative.');
+  }
 }
 
-/**
- * Check if a segment has valid (non-zero) length
- */
-export function hasValidLength(segment: Segment): boolean {
-  return segment.length > 0;
+export function validateSegment(segment: Segment2D): void {
+  if (!Number.isFinite(distance(...segment))) {
+    throw new RangeError(
+      'Edge length must be finite; use endpoints with a representable separation.',
+    );
+  }
 }
 
-/**
- * Compare two points for equality
- */
-export function pointsEqual(p1: NxPoint, p2: NxPoint): boolean {
-  const r1 = roundPoint(p1);
-  const r2 = roundPoint(p2);
-  return r1[0] === r2[0] && r1[1] === r2[1];
+export function pairKey(a: string, b: string): string {
+  return JSON.stringify(a < b ? [a, b] : [b, a]);
+}
+
+/** Stable lexical ordering, independent of the runtime's locale. */
+export const compareKeys = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+export const freezePoint = (point: Point2D): Point2D =>
+  Object.freeze([point[0], point[1]] as const);
+
+export function copyData<T extends object>(data: T): T {
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    throw new TypeError('Attributes must be an object dictionary.');
+  }
+  return { ...data };
 }

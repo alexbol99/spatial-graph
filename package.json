@@ -1,6 +1,6 @@
 {
   "name": "@flatten-js/spatial-graph",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Build, query and clean 2D line networks: points as nodes, segments as edges. Shortest paths, nearest-edge snapping, edge splitting, merging and network analysis, on graphology and @flatten-js/core.",
   "keywords": [
     "graph",
@@ -66,20 +66,29 @@
     "test": "vitest run",
     "check:package": "publint --strict && attw --pack .",
     "check:examples": "tsc -p examples && for f in examples/*.ts; do node \"$f\" > /dev/null || exit 1; done",
-    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package"
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build && pnpm check:package && pnpm check:examples && pnpm check:consumers",
+    "check:consumers": "tsc -p scripts/type-consumers && node scripts/check-package-runtime.mjs",
+    "check:browser": "node scripts/check-browser.mjs"
   },
   "peerDependencies": {
     "@flatten-js/core": "^1.6.12"
   },
   "dependencies": {
-    "graphology": "^0.25.4",
+    "graphology": "^0.26.0",
+    "graphology-components": "^1.5.4",
     "graphology-shortest-path": "^2.1.0",
-    "graphology-types": "^0.24.8"
+    "graphology-traversal": "^0.3.1",
+    "graphology-types": "^0.24.8",
+    "rbush": "^4.0.1"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
     "@flatten-js/core": "^1.6.12",
     "@types/node": "^24.0.0",
+    "@types/rbush": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "fast-check": "^4.10.2",
+    "playwright": "^1.64.0",
     "publint": "^0.3.24",
     "tsdown": "^0.23.0",
     "typescript": "~5.9.3",

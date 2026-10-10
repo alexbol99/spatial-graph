@@ -1,1271 +1,2028 @@
-import graphology from 'graphology';
-import type { GraphConstructor, GraphOptions } from 'graphology-types';
-import { dijkstra } from 'graphology-shortest-path';
-import { Segment, Point, Multiline } from '@flatten-js/core';
-import type {
-  NxPoint,
-  NxEdge,
-  EdgeAttributes,
-  NodeAttributes,
-  SpatialGraphOptions,
-  FilterPredicate,
-  IsValidCallback,
-} from './types.js';
+import type { AbstractGraph } from 'graphology-types';
+import { connectedComponents } from 'graphology-components';
 import {
-  roundPoint,
-  toFlattenPoint,
-  toFlattenSegment,
-  fromFlattenSegment,
-  getLinesAngleByCross,
-  getLinesDot,
-  hasValidLength,
-  pointsEqual,
+  bfs as graphologyBfs,
+  bfsFromNode as graphologyBfsFromNode,
+  dfs as graphologyDfs,
+  dfsFromNode as graphologyDfsFromNode,
+} from 'graphology-traversal';
+import { Point, Segment } from '@flatten-js/core';
+import { canonicalPoint, pointKey, validatePrecision, parseKey } from './internal/coordinates.js';
+import { createStorage, edgeSnapshot, nodeSnapshot } from './internal/storage.js';
+import type { StoredEdge, StoredNode } from './internal/storage.js';
+import { emptyPlan, mergeData, planMoves } from './internal/mutations.js';
+import type { MutationPlan } from './internal/mutations.js';
+import { SpatialIndex, bounds } from './internal/spatialIndex.js';
+import { toGraphology as detachedGraphology } from './adapters/graphology.js';
+import { SpatialNode } from './SpatialNode.js';
+import { SpatialEdge } from './SpatialEdge.js';
+import {
+  angleDegrees,
+  compareKeys,
+  copyData,
+  distance,
+  freezePoint,
+  pairKey,
+  pointOf,
+  validateAngle,
+  validateSegment,
+  validateTolerance,
+  vector,
 } from './utils/geometry.js';
-import { projectEdgeToLine, projectPointOnSegment } from './utils/projection.js';
-import {
-  DEFAULT_ANGLE_TOLERANCE_DEG,
-  MIN_EDGE_MOVEMENT_DISTANCE,
-  RIGHT_ANGLE_DEG,
-  JUNCTION_MIN_DEGREE,
-  STUB_DEGREE,
-} from './constants.js';
+import { projectPoint } from './utils/projection.js';
+import { intersectSegments } from './utils/intersection.js';
+import { decompose } from './algorithms/traversal.js';
+import { shortestPath } from './algorithms/routing.js';
+import { PathAlgorithm } from './types.js';
+import { nearestKey } from './algorithms/nearest.js';
+import { classifyNode } from './algorithms/classification.js';
+import { decodeGraphJSON, decodeLegacyJSON } from './adapters/serialization.js';
+import { decodeGraphology } from './adapters/graphology.js';
+import { decodeGeoJSON, encodeGeoJSON } from './adapters/geojson.js';
+import { flattenSegments } from './adapters/flatten.js';
+import type {
+  AttributeArgs,
+  BatchInsertResult,
+  ConflictOptions,
+  ConstructorArgs,
+  EdgeAttributes,
+  EdgeInput,
+  EdgeInsertResult,
+  EdgeRecord,
+  GeoJSONCollection,
+  GraphologyImportArgs,
+  JoinOptions,
+  JoinResult,
+  LabelInput,
+  MutationReport,
+  NearestEdgeResult,
+  NearbyMergeResult,
+  NodeAttributes,
+  NodeInput,
+  NodeType,
+  PathOptions,
+  PlanarizeResult,
+  Point2D,
+  RouteResult,
+  Segment2D,
+  SpatialGraphConfig,
+  SpatialGraphJSON,
+  SpatialPath,
+  SplitOptions,
+  SplitResult,
+  Vector2D,
+  TraversalCallback,
+} from './types.js';
 
-// graphology is CommonJS (`module.exports = Graph`) but ships ESM-style typings,
-// so its default import is typed differently from ESM and CJS consumers.
-// At runtime it is the Graph class in both; graphology-types' GraphConstructor
-// gives it one type regardless of module format.
-const Graph = graphology as unknown as GraphConstructor<NodeAttributes, EdgeAttributes>;
+const VIRTUAL_SOURCE_KEY = '@from';
+const VIRTUAL_TARGET_KEY = '@to';
 
-/**
- * An undirected 2D graph whose nodes are points and whose edges are segments.
- *
- * Extends graphology's `Graph`, so every graphology method (`degree`, `neighbors`,
- * `export`, `import`, ...) is available too. Prefer the point-based methods below
- * over the raw graphology ones: they take `[x, y]` tuples and handle node keys
- * for you.
- *
- * @remarks
- * - Nodes are keyed by their coordinates rounded to whole numbers. Points that
- *   round to the same key are the same node.
- * - The graph is undirected and simple: no parallel edges. Point-based segment
- *   methods silently skip self-loops, including zero-length segments and
- *   endpoints that round to the same node. Raw graphology methods allow
- *   self-loops by default; pass `allowSelfLoops: false` to the constructor
- *   to disallow them.
- * - Edge attribute `weight` is the segment length and is what path finding uses.
- * - Query methods on a missing point return an empty value (`[]`, `null`, `{}`,
- *   `0` or `false`) rather than throwing, unless a method says otherwise.
- * - To serialize, use graphology: `new SpatialGraph().import(graph.export())`.
- *   `copy()`, `emptyCopy()` and `nullCopy()` return a `SpatialGraph`.
- *   `Graph.from()` returns a plain graphology `Graph`.
- *
- * @example
- * ```ts
- * const graph = new SpatialGraph({
- *   segments: [
- *     new Segment(new Point(0, 0), new Point(10, 0)),
- *     new Segment(new Point(10, 0), new Point(10, 10)),
- *   ],
- * });
- * graph.getShortestPath([0, 0], [10, 10]); // Segment[] of length 2
- * ```
- */
-export class SpatialGraph extends Graph {
-  constructor(options?: SpatialGraphOptions) {
-    super({ type: 'undirected', multi: false, allowSelfLoops: options?.allowSelfLoops ?? true });
+/** A 2D, undirected, simple graph. Coordinates identify nodes; results are immutable snapshots. */
+export class SpatialGraph<N extends object = NodeAttributes, E extends object = EdgeAttributes> {
+  #graph: AbstractGraph<StoredNode<N>, StoredEdge<E>>;
+  #nodeIndex = new SpatialIndex();
+  #edgeIndex = new SpatialIndex();
+  #busy = false;
+  private edgeSequence = 0;
+  private currentRevision = 0;
+  private nodeCopies?: WeakMap<N, N>;
+  private edgeCopies?: WeakMap<E, E>;
+  private config: SpatialGraphConfig<N, E>;
+  readonly coordinatePrecision: number | null;
+  readonly positionTolerance: number;
+  readonly straightAngleToleranceDeg: number;
 
-    if (options?.segments) {
-      this.addSegments(options.segments, options.attrs);
+  /**
+   * Create an empty graph.
+   * @throws For invalid options, precision, tolerances or callback types.
+   */
+  constructor(...args: ConstructorArgs<NoInfer<N>, NoInfer<E>>) {
+    this.config = args[0] === undefined ? {} : copyData(args[0]);
+    for (const name of [
+      'createNodeAttributes',
+      'cloneNodeAttributes',
+      'cloneEdgeAttributes',
+    ] as const) {
+      if (this.config[name] !== undefined && typeof this.config[name] !== 'function') {
+        throw new TypeError(
+          `${name} must be a function; pass a metadata factory or clone callback.`,
+        );
+      }
+    }
+    this.coordinatePrecision = this.config.coordinatePrecision ?? null;
+    this.positionTolerance = this.config.positionTolerance ?? 1e-9;
+    this.straightAngleToleranceDeg = this.config.straightAngleToleranceDeg ?? 1e-7;
+    validatePrecision(this.coordinatePrecision);
+    validateTolerance(this.positionTolerance);
+    validateAngle(this.straightAngleToleranceDeg);
+    Object.defineProperties(this, {
+      coordinatePrecision: { writable: false },
+      positionTolerance: { writable: false },
+      straightAngleToleranceDeg: { writable: false },
+    });
+    this.#graph = createStorage<N, E>();
+  }
+
+  /** Number of current nodes. */
+  get nodeCount(): number {
+    return this.#graph.order;
+  }
+
+  /** Number of current edges. */
+  get edgeCount(): number {
+    return this.#graph.size;
+  }
+
+  /** Changes after each committed operation; retained snapshots remain unchanged. */
+  get revision(): number {
+    return this.currentRevision;
+  }
+
+  private guarded<T>(operation: () => T): T {
+    if (this.#busy) {
+      throw new Error(
+        'Cannot mutate or start another operation inside a graph callback; finish the current operation first.',
+      );
+    }
+    this.#busy = true;
+    this.nodeCopies = new WeakMap();
+    this.edgeCopies = new WeakMap();
+    try {
+      return operation();
+    } finally {
+      this.#busy = false;
+      this.nodeCopies = undefined;
+      this.edgeCopies = undefined;
     }
   }
 
-  /**
-   * Return a SpatialGraph with shallow-copied graph attributes and no nodes or edges.
-   * An empty source also returns an empty SpatialGraph.
-   * @throws If options request a directed, mixed or multi graph; use undirected and multi: false.
-   * @throws If graphology options are invalid; pass valid GraphOptions.
-   */
-  override nullCopy(options?: Partial<GraphOptions>): SpatialGraph {
-    if ((options?.type !== undefined && options.type !== 'undirected') ||
-        (options?.multi !== undefined && options.multi !== false)) {
-      throw new Error('SpatialGraph copies must be undirected and simple; use type: "undirected" and multi: false.');
-    }
-    const graph = new SpatialGraph({ allowSelfLoops: options?.allowSelfLoops ?? this.allowSelfLoops });
-    graph.replaceAttributes({ ...this.getAttributes() });
-    return graph;
-  }
-
-  /**
-   * Return a SpatialGraph with shallow-copied graph and node attributes, without edges.
-   * An empty source also returns an empty SpatialGraph.
-   * @throws If options are invalid or request a directed, mixed or multi graph; use valid undirected, simple options.
-   */
-  override emptyCopy(options?: Partial<GraphOptions>): SpatialGraph {
-    return super.emptyCopy(options) as SpatialGraph;
-  }
-
-  /**
-   * Return a SpatialGraph with all nodes, edges, keys and shallow-copied attributes.
-   * An empty source also returns an empty SpatialGraph.
-   * @throws If options are invalid or incompatible; keep the graph undirected and simple and do not disable allowed self-loops.
-   */
-  override copy(options?: Partial<GraphOptions>): SpatialGraph {
-    return super.copy(options) as SpatialGraph;
-  }
-
-  /**
-   * Convert a point to a string key for use in graphology (`"x,y"` after rounding)
-   */
-  protected nodeKey(point: NxPoint): string {
-    const rounded = roundPoint(point);
-    return `${rounded[0]},${rounded[1]}`;
-  }
-
-  /**
-   * Get the coordinate-derived graphology key for a point, e.g. `"10,0"`.
-   * Use it when you need to call a raw graphology method such as `degree(key)`.
-   */
-  getPointKey(point: NxPoint): string {
-    return this.nodeKey(point);
-  }
-
-  /**
-   * Parse a node key back to a point
-   */
-  protected parseNode(key: string): NxPoint | null {
-    const parts = key.split(',');
-    if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
-
-    const x = parseFloat(parts[0]);
-    const y = parseFloat(parts[1]);
-
-    if (isNaN(x) || isNaN(y)) return null;
-
-    return [x, y];
-  }
-
-  /**
-   * Add an edge with attributes
-   */
-  protected addEdgeWithAttrs(
-    start: NxPoint,
-    end: NxPoint,
-    attrs: Record<string, unknown> = {},
-  ): void {
-    const startKey = this.nodeKey(start);
-    const endKey = this.nodeKey(end);
-
-    // Distinct coordinates can round to the same node key; the edge would be a
-    // zero-length self-loop in graph space.
-    if (startKey === endKey) {
-      return;
-    }
-
-    // Ensure nodes exist
-    if (!this.hasNode(startKey)) {
-      this.addNode(startKey);
-    }
-    if (!this.hasNode(endKey)) {
-      this.addNode(endKey);
-    }
-
-    // Weight is the distance between the nodes as stored, i.e. rounded
-    const segment = new Segment(toFlattenPoint(roundPoint(start)), toFlattenPoint(roundPoint(end)));
-    const weight = segment.length;
-
-    // Add edge if it doesn't exist
-    if (!this.hasEdge(startKey, endKey)) {
-      this.addEdge(startKey, endKey, { ...attrs, weight });
+  private callback<T>(operation: () => T): T {
+    const busy = this.#busy;
+    this.#busy = true;
+    try {
+      return operation();
+    } finally {
+      this.#busy = busy;
     }
   }
 
-  /**
-   * Find edge key between two nodes
-   */
-  protected findEdgeKey(start: NxPoint, end: NxPoint): string | null {
-    const startKey = this.nodeKey(start);
-    const endKey = this.nodeKey(end);
+  private cloneNode = (data: N): N =>
+    copyData(
+      this.config.cloneNodeAttributes
+        ? this.callback(() => this.config.cloneNodeAttributes!(copyData(data)))
+        : data,
+    );
 
-    if (!this.hasNode(startKey) || !this.hasNode(endKey)) {
+  private cloneEdge = (data: E): E =>
+    copyData(
+      this.config.cloneEdgeAttributes
+        ? this.callback(() => this.config.cloneEdgeAttributes!(copyData(data)))
+        : data,
+    );
+
+  private snapshotNodeCopy = (data: N): N => {
+    const copy = this.nodeCopies?.get(data) ?? this.cloneNode(data);
+    this.nodeCopies?.set(data, copy);
+    return copy;
+  };
+
+  private snapshotEdgeCopy = (data: E): E => {
+    const copy = this.edgeCopies?.get(data) ?? this.cloneEdge(data);
+    this.edgeCopies?.set(data, copy);
+    return copy;
+  };
+
+  private newNodeData(): N {
+    // ConstructorArgs requires a factory when {} does not satisfy N.
+    return this.cloneNode(
+      this.config.createNodeAttributes
+        ? this.callback(this.config.createNodeAttributes)
+        : ({} as N),
+    );
+  }
+
+  private canonical(point: Point2D): Point2D {
+    return canonicalPoint(point, this.coordinatePrecision);
+  }
+
+  private pointOfInput(node: NodeInput<N>): Point2D {
+    return node instanceof SpatialNode ? node.point : node;
+  }
+
+  private keyOf(node: NodeInput<N>): string {
+    return this.getNodeKey(this.pointOfInput(node));
+  }
+
+  private segmentOf(edge: EdgeInput<N, E>): Segment2D {
+    return edge instanceof SpatialEdge ? edge.endpoints : edge;
+  }
+
+  private edgeKey(edge: EdgeInput<N, E>): string | undefined {
+    const [a, b] = this.segmentOf(edge).map((point) => this.getNodeKey(point)) as [string, string];
+    return this.#graph.hasNode(a) && this.#graph.hasNode(b) ? this.#graph.edge(a, b) : undefined;
+  }
+
+  private segment(key: string): Segment2D {
+    return this.#graph
+      .extremities(key)
+      .map((node) => pointOf(this.#graph.getNodeAttributes(node))) as unknown as Segment2D;
+  }
+
+  private nodeSnapshot(key: string, cache?: Map<string, SpatialNode<N>>): SpatialNode<N> {
+    return nodeSnapshot(
+      this.#graph,
+      key,
+      this.straightAngleToleranceDeg,
+      cache,
+      this.snapshotNodeCopy,
+    );
+  }
+
+  private edgeSnapshot(key: string, cache?: Map<string, SpatialNode<N>>): SpatialEdge<N, E> {
+    return edgeSnapshot(
+      this.#graph,
+      key,
+      this.straightAngleToleranceDeg,
+      cache,
+      this.snapshotNodeCopy,
+      this.snapshotEdgeCopy,
+    );
+  }
+
+  private nextEdgeKey(reserved: Set<string> = new Set()): string {
+    let key: string;
+    do {
+      key = `e${this.edgeSequence++}`;
+    } while (this.#graph.hasEdge(key) || reserved.has(key));
+    return key;
+  }
+
+  private apply(plan: MutationPlan<N, E>): void {
+    // Clone hooks for returned snapshots run before storage commits.
+    for (const record of plan.nodes.values()) {
+      this.snapshotNodeCopy(record.data);
+    }
+    for (const edge of plan.edges) {
+      this.snapshotEdgeCopy(edge.data);
+      for (const node of [edge.source, edge.target]) {
+        this.snapshotNodeCopy((plan.nodes.get(node) ?? this.#graph.getNodeAttributes(node)).data);
+      }
+    }
+
+    const reserved = new Set(
+      plan.edges.flatMap((edge) => (edge.key === undefined ? [] : [edge.key])),
+    );
+    for (const key of new Set([
+      ...plan.removeEdges,
+      ...plan.removeNodes.flatMap((node) => this.#graph.edges(node)),
+    ])) {
+      this.#edgeIndex.remove(key);
+      if (this.#graph.hasEdge(key)) {
+        this.#graph.dropEdge(key);
+      }
+    }
+    for (const key of plan.removeNodes) {
+      this.#nodeIndex.remove(key);
+      this.#graph.dropNode(key);
+    }
+    for (const [key, record] of plan.nodes) {
+      if (this.#graph.hasNode(key)) {
+        this.#graph.replaceNodeAttributes(key, record);
+      } else {
+        this.#graph.addNode(key, record);
+      }
+      this.#nodeIndex.set(key, bounds([pointOf(record), pointOf(record)]));
+    }
+    for (const edge of plan.edges) {
+      const existing = this.#graph.edge(edge.source, edge.target);
+
+      if (existing !== undefined) {
+        this.#graph.replaceEdgeAttributes(existing, { data: edge.data });
+      } else {
+        const key = edge.key ?? this.nextEdgeKey(reserved);
+        this.#graph.addUndirectedEdgeWithKey(key, edge.source, edge.target, { data: edge.data });
+        this.#edgeIndex.set(key, bounds(this.segment(key)));
+      }
+    }
+    if (
+      plan.removeNodes.length ||
+      plan.removeEdges.length ||
+      plan.nodes.size ||
+      plan.edges.length
+    ) {
+      this.currentRevision++;
+    }
+  }
+
+  /** Canonical coordinate key. @throws For non-finite or unquantizable coordinates. */
+  getNodeKey(point: Point2D): string {
+    return pointKey(this.canonical(point));
+  }
+
+  /**
+   * Current node at the input's canonical position, or null when absent.
+   * @throws For invalid coordinates/options.
+   */
+  getNode(node: NodeInput<N>): SpatialNode<N> | null {
+    const key = this.keyOf(node);
+    return this.#graph.hasNode(key) ? this.nodeSnapshot(key) : null;
+  }
+
+  /**
+   * Current node by canonical key, or null when absent.
+   * @throws For malformed/noncanonical keys.
+   */
+  getNodeByKey(key: string): SpatialNode<N> | null {
+    if (this.getNodeKey(parseKey(key)) !== key) {
+      throw new Error('Node key is not canonical; obtain it with getNodeKey(point).');
+    }
+
+    return this.#graph.hasNode(key) ? this.nodeSnapshot(key) : null;
+  }
+
+  /** Membership at a canonical position. @throws For invalid coordinates/options. */
+  hasNode(node: NodeInput<N>): boolean {
+    return this.#graph.hasNode(this.keyOf(node));
+  }
+
+  /** Upsert a node; supplied attributes win. @throws For invalid coordinates/metadata. */
+  addNode(point: Point2D, ...args: AttributeArgs<N>): SpatialNode<N> {
+    return this.guarded(() => {
+      const canonical = this.canonical(point);
+      const key = pointKey(canonical);
+      const data = this.cloneNode((args[0] ?? {}) as N);
+      const plan = emptyPlan<N, E>();
+      plan.nodes.set(key, {
+        x: canonical[0],
+        y: canonical[1],
+        data: this.#graph.hasNode(key)
+          ? { ...this.#graph.getNodeAttributes(key).data, ...data }
+          : data,
+      });
+      this.apply(plan);
+      return this.nodeSnapshot(key);
+    });
+  }
+
+  /** Snapshots of all current nodes in insertion order. */
+  getNodes(): SpatialNode<N>[] {
+    return this.#graph.nodes().map((key) => this.nodeSnapshot(key));
+  }
+
+  /** Coordinates of all nodes, without topology materialization. */
+  getNodePoints(): Point2D[] {
+    return this.#graph
+      .nodes()
+      .map((key) => freezePoint(pointOf(this.#graph.getNodeAttributes(key))));
+  }
+
+  /** Neighbors in insertion order; [] when absent. @throws For invalid coordinates/options. */
+  getNeighbors(node: NodeInput<N>): SpatialNode<N>[] {
+    const key = this.keyOf(node);
+
+    if (!this.#graph.hasNode(key)) {
+      return [];
+    }
+
+    return this.#graph.neighbors(key).map((key) => this.nodeSnapshot(key));
+  }
+
+  /** Classification now; null when absent. @throws For invalid coordinates/options. */
+  getNodeType(node: NodeInput<N>): NodeType | null {
+    const key = this.keyOf(node);
+
+    if (!this.#graph.hasNode(key)) {
       return null;
     }
 
-    return this.edge(startKey, endKey) || null;
+    return classifyNode(this.#graph, key, this.straightAngleToleranceDeg);
+  }
+
+  /** Current degree; null when absent. @throws For invalid coordinates/options. */
+  getNodeDegree(node: NodeInput<N>): number | null {
+    const key = this.keyOf(node);
+    return this.#graph.hasNode(key) ? this.#graph.degree(key) : null;
+  }
+
+  /** Nodes with the specified current classification. */
+  getNodesByType(type: NodeType): SpatialNode<N>[] {
+    return this.getNodes().filter((node) => node.type === type);
+  }
+
+  /** Current junctions. */
+  getJunctions(): SpatialNode<N>[] {
+    return this.getNodesByType('junction');
+  }
+
+  /** Current dead ends. */
+  getStubs(): SpatialNode<N>[] {
+    return this.getNodesByType('stub');
+  }
+
+  /** Current copied node metadata; null when absent. @throws For invalid coordinates/options. */
+  getNodeAttributes(node: NodeInput<N>): Readonly<N> | null {
+    const key = this.keyOf(node);
+
+    if (!this.#graph.hasNode(key)) {
+      return null;
+    }
+
+    const attributes = this.#graph.getNodeAttributes(key).data;
+    return Object.freeze(this.cloneNode(attributes));
   }
 
   /**
-   * Find the graphology edge key for an edge.
+   * Merge into an existing node; null when absent. No implicit node creation.
+   * @throws For invalid coordinates/options.
    */
-  getEdgeKeyFor(edge: NxEdge): string | null {
-    return this.findEdgeKey(edge[0], edge[1]);
-  }
+  mergeNodeAttributes(node: NodeInput<N>, attributes: Partial<N>): SpatialNode<N> | null {
+    return this.guarded(() => {
+      const key = this.keyOf(node);
 
-  /**
-   * Return an edge between two points when it exists.
-   */
-  getEdgeBetweenPoints(start: NxPoint, end: NxPoint): NxEdge | null {
-    return this.findEdgeKey(start, end) ? [roundPoint(start), roundPoint(end)] : null;
-  }
-
-  /**
-   * Copy edge attributes from an existing edge
-   */
-  protected copyEdgeAttributes(start: NxPoint, end: NxPoint): Record<string, unknown> {
-    const edgeKey = this.findEdgeKey(start, end);
-    if (!edgeKey) return {};
-
-    return { ...this.getEdgeAttributes(edgeKey) };
-  }
-
-  /**
-   * Normalize segments input (flatten Multiline to Segments)
-   */
-  private normalizeSegments(
-    segments: Array<Segment | Multiline>,
-    attrs?: Array<Record<string, unknown>>,
-  ): Array<{ segment: Segment; attr: Record<string, unknown> }> {
-    const result: Array<{ segment: Segment; attr: Record<string, unknown> }> = [];
-
-    for (const [index, item] of segments.entries()) {
-      const attr = attrs?.[index] || {};
-      if (item instanceof Multiline) {
-        // Convert multiline to individual segments
-        const shapes = item.toShapes();
-        for (const shape of shapes) {
-          if (shape instanceof Segment) {
-            result.push({ segment: shape, attr });
-          }
-        }
-      } else if (item instanceof Segment) {
-        result.push({ segment: item, attr });
+      if (!this.#graph.hasNode(key)) {
+        return null;
       }
-    }
 
-    return result;
-  }
-
-  /**
-   * Add multiple segments to the graph.
-   *
-   * A `Multiline` is added as its individual segments. `attrs[i]` is applied to
-   * every segment produced by `segments[i]`. Zero-length segments are skipped.
-   */
-  addSegments(segments: Array<Segment | Multiline>, attrs?: Array<Record<string, unknown>>): void {
-    const normalizedSegments = this.normalizeSegments(segments, attrs);
-
-    normalizedSegments.forEach(({ segment, attr }) => {
-      this.addSegment(segment, attr);
+      const record = this.#graph.getNodeAttributes(key);
+      const data = this.cloneNode({ ...record.data, ...copyData(attributes) });
+      this.snapshotNodeCopy(data);
+      this.#graph.replaceNodeAttributes(key, { ...record, data });
+      this.currentRevision++;
+      return this.nodeSnapshot(key);
     });
   }
 
   /**
-   * Add a single segment to the graph, creating its end nodes when needed.
-   * Does nothing for a zero-length segment or when the edge already exists
-   * (existing attributes are kept). The `weight` attribute is set to the length
-   * between the rounded endpoints and overrides any `weight` in `attr`.
+   * Remove a node and its incident edges; false when absent.
+   * @throws For invalid coordinates/options.
    */
-  addSegment(segment: Segment, attr: Record<string, unknown> = {}): void {
-    if (!hasValidLength(segment)) {
-      return;
-    }
-
-    const start = fromFlattenSegment(segment)[0];
-    const end = fromFlattenSegment(segment)[1];
-
-    this.addEdgeWithAttrs(start, end, attr);
+  removeNode(node: NodeInput<N>): boolean {
+    return this.removeNodes([node]) > 0;
   }
 
-  /**
-   * Add a node without any edges. When the node exists, `attr` is merged into
-   * its attributes.
-   */
-  addVertex(point: NxPoint, attr: Record<string, unknown> = {}): void {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key)) {
-      this.addNode(key, attr);
-    } else {
-      this.mergeNodeAttributes(key, attr);
-    }
-  }
-
-  /** Whether the graph has a node at this point (after rounding). */
-  hasPointNode(point: NxPoint): boolean {
-    return this.hasNode(this.nodeKey(point));
-  }
-
-  /** Number of edges at this point; `0` when the point is not a node. */
-  getPointDegree(point: NxPoint): number {
-    const key = this.nodeKey(point);
-    return this.hasNode(key) ? this.degree(key) : 0;
-  }
-
-  /** Nodes connected to this point by an edge; `[]` when the point is not a node. */
-  getPointNeighbors(point: NxPoint): NxPoint[] {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key)) return [];
-
-    return this.neighbors(key).flatMap((neighbor) => {
-      const parsed = this.parseNode(neighbor);
-      return parsed ? [parsed] : [];
+  /** Remove nodes atomically; returns the number removed. @throws For invalid coordinates. */
+  removeNodes(nodes: readonly NodeInput<N>[]): number {
+    return this.guarded(() => {
+      const keys = [...new Set(nodes.map((node) => this.keyOf(node)))].filter((key) =>
+        this.#graph.hasNode(key),
+      );
+      const plan = emptyPlan<N, E>();
+      plan.removeNodes = keys;
+      this.apply(plan);
+      return keys.length;
     });
   }
 
-  /** Attributes of the node at this point; `{}` when the point is not a node. */
-  getPointAttributes(point: NxPoint): NodeAttributes {
-    const key = this.nodeKey(point);
-    return this.hasNode(key) ? this.getNodeAttributes(key) : {};
-  }
-
-  /** Merge `attrs` into the node's attributes, creating the node when it does not exist. */
-  mergePointAttributes(point: NxPoint, attrs: Record<string, unknown>): void {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key)) {
-      this.addNode(key, attrs);
-      return;
-    }
-
-    this.mergeNodeAttributes(key, attrs);
-  }
-
-  /** Attributes of the edge between the two points; `null` when there is no such edge. */
-  getEdgeAttributesFor(edge: NxEdge): EdgeAttributes | null {
-    const edgeKey = this.findEdgeKey(edge[0], edge[1]);
-    return edgeKey ? this.getEdgeAttributes(edgeKey) : null;
-  }
-
-  /** Merge `attrs` into an existing edge's attributes; does nothing when there is no such edge. */
-  mergeEdgePointAttributes(edge: NxEdge, attrs: Record<string, unknown>): void {
-    const edgeKey = this.findEdgeKey(edge[0], edge[1]);
-    if (!edgeKey) return;
-    this.mergeEdgeAttributes(edgeKey, attrs);
-  }
-
-  /** Remove the edge between the two points. Its end nodes stay in the graph. */
-  removeEdge(edge: NxEdge): void {
-    this.removeSegment(toFlattenSegment(edge));
-  }
-
-  /** Remove several edges; see {@link SpatialGraph.removeEdge}. */
-  removeEdges(edges: NxEdge[]): void {
-    edges.forEach((edge) => this.removeEdge(edge));
-  }
-
-  /** Remove the node at this point together with all its edges. */
-  removePoint(point: NxPoint): void {
-    const key = this.nodeKey(point);
-    if (this.hasNode(key)) {
-      this.dropNode(key);
-    }
-  }
-
-  /** Remove several nodes and their edges; see {@link SpatialGraph.removePoint}. */
-  removePoints(points: NxPoint[]): void {
-    points.forEach((point) => this.removePoint(point));
-  }
-
   /**
-   * Remove the edge that matches a segment. Its end nodes stay in the graph.
+   * Remove a dead end; false for missing/non-stub nodes.
+   * @throws For invalid coordinates/options.
    */
-  removeSegment(segment: Segment): void {
-    const edge = fromFlattenSegment(segment);
-    const startKey = this.nodeKey(edge[0]);
-    const endKey = this.nodeKey(edge[1]);
-
-    if (this.hasEdge(startKey, endKey)) {
-      this.dropEdge(startKey, endKey);
-    }
+  removeStubNode(node: NodeInput<N>): boolean {
+    return this.getNodeDegree(node) === 1 && this.removeNode(node);
   }
 
-  /**
-   * Get all edges as `[start, end]` point pairs, in graphology insertion order.
-   * The pair orientation is not guaranteed to match how the edge was added.
-   */
-  getEdges(): NxEdge[] {
-    const edges: NxEdge[] = [];
+  private insert(records: readonly EdgeRecord<E>[]): BatchInsertResult<N, E> {
+    const plan = emptyPlan<N, E>();
+    const known = new Set<string>();
+    const prepared = records.map(({ endpoints, attributes }) => {
+      const segment: Segment2D = [
+        freezePoint(this.canonical(endpoints[0])),
+        freezePoint(this.canonical(endpoints[1])),
+      ];
+      validateSegment(segment);
+      return { endpoints: segment, attributes: this.cloneEdge(attributes) };
+    });
+    const statuses: Array<'added' | 'existing' | 'collapsed'> = [];
 
-    this.forEachEdge((edge, attrs, source, target) => {
-      const start = this.parseNode(source);
-      const end = this.parseNode(target);
+    for (const { endpoints, attributes } of prepared) {
+      const [a, b] = endpoints.map(pointKey) as [string, string];
+      const pair = pairKey(a, b);
 
-      if (start && end) {
-        edges.push([start, end]);
+      if (a === b) {
+        statuses.push('collapsed');
+        continue;
       }
-    });
-
-    return edges;
-  }
-
-  /**
-   * Get all nodes as NxPoint array
-   */
-  getNodes(): NxPoint[] {
-    const nodes: NxPoint[] = [];
-
-    this.forEachNode((node) => {
-      const point = this.parseNode(node);
-      if (point) {
-        nodes.push(point);
+      if (
+        known.has(pair) ||
+        (this.#graph.hasNode(a) && this.#graph.hasNode(b) && this.#graph.hasEdge(a, b))
+      ) {
+        statuses.push('existing');
+        continue;
       }
-    });
+      known.add(pair);
+      for (const point of endpoints) {
+        const key = pointKey(point);
 
-    return nodes;
-  }
-
-  /**
-   * Get all segments as Segment array
-   */
-  getSegments(): Segment[] {
-    return this.getEdges().map((edge) => toFlattenSegment(edge));
-  }
-
-  /**
-   * Get all vertices as Point array
-   */
-  getVertices(): Point[] {
-    return this.getNodes().map((node) => toFlattenPoint(node));
-  }
-
-  /**
-   * Get all junction nodes: points where more than two edges meet (degree > 2).
-   */
-  getJunctions(): NxPoint[] {
-    const junctions: NxPoint[] = [];
-
-    this.forEachNode((node) => {
-      if (this.degree(node) > JUNCTION_MIN_DEGREE) {
-        const point = this.parseNode(node);
-        if (point) {
-          junctions.push(point);
+        if (!this.#graph.hasNode(key) && !plan.nodes.has(key)) {
+          plan.nodes.set(key, { x: point[0], y: point[1], data: this.newNodeData() });
         }
       }
-    });
+      plan.edges.push({ source: a, target: b, data: attributes });
+      statuses.push('added');
+    }
+    // Existing inputs are also returned; materialize their clone hooks before committing the batch.
+    for (const { endpoints } of prepared) {
+      const key = this.edgeKey(endpoints);
 
-    return junctions;
+      if (key !== undefined) {
+        this.edgeSnapshot(key);
+      }
+    }
+    this.apply(plan);
+    const results = prepared.map(
+      ({ endpoints }, index): EdgeInsertResult<N, E> =>
+        statuses[index] === 'collapsed'
+          ? { status: 'collapsed', edge: null, endpoints }
+          : {
+              status: statuses[index] as 'added' | 'existing',
+              edge: this.getEdge(endpoints)!,
+              endpoints,
+            },
+    );
+    return {
+      results,
+      added: statuses.filter((s) => s === 'added').length,
+      existing: statuses.filter((s) => s === 'existing').length,
+      collapsed: statuses.filter((s) => s === 'collapsed').length,
+    };
   }
 
   /**
-   * Get all stub nodes: dead ends with exactly one edge (degree = 1).
+   * Insert an edge and missing endpoints; reports added/existing/collapsed.
+   * @throws Before mutation for invalid inputs.
    */
-  getStubs(): NxPoint[] {
-    const stubs: NxPoint[] = [];
+  addEdge(endpoints: Segment2D, ...args: AttributeArgs<E>): EdgeInsertResult<N, E> {
+    return this.guarded(
+      () => this.insert([{ endpoints, attributes: (args[0] ?? {}) as E }]).results[0]!,
+    );
+  }
 
-    this.forEachNode((node) => {
-      if (this.degree(node) === STUB_DEGREE) {
-        const point = this.parseNode(node);
-        if (point) {
-          stubs.push(point);
+  /**
+   * Atomic batch insertion; reports every input in order.
+   * @throws Before mutation for invalid inputs.
+   */
+  addEdges(records: readonly EdgeRecord<E>[]): BatchInsertResult<N, E> {
+    return this.guarded(() => this.insert(records));
+  }
+
+  /** Current edge by endpoints; null when absent. @throws For invalid coordinates/options. */
+  getEdge(edge: EdgeInput<N, E>): SpatialEdge<N, E> | null {
+    const key = this.edgeKey(edge);
+    return key === undefined ? null : this.edgeSnapshot(key);
+  }
+
+  /**
+   * Current edge between two positions; null when absent.
+   * @throws For invalid coordinates/options.
+   */
+  getEdgeBetween(a: NodeInput<N>, b: NodeInput<N>): SpatialEdge<N, E> | null {
+    return this.getEdge([this.pointOfInput(a), this.pointOfInput(b)]);
+  }
+
+  /**
+   * Whether an edge exists between the canonical endpoints.
+   * @throws For invalid coordinates/options.
+   */
+  hasEdge(edge: EdgeInput<N, E>): boolean {
+    return this.edgeKey(edge) !== undefined;
+  }
+
+  /** Current edges in insertion order, sharing node snapshots within the result. */
+  getEdges(): SpatialEdge<N, E>[] {
+    const cache = new Map<string, SpatialNode<N>>();
+    return this.#graph.edges().map((key) => this.edgeSnapshot(key, cache));
+  }
+
+  /** Current canonical edge geometry, without classification materialization. */
+  getEdgeSegments(): Segment2D[] {
+    return this.#graph
+      .edges()
+      .map((key) => Object.freeze(this.segment(key).map(freezePoint)) as unknown as Segment2D);
+  }
+
+  /**
+   * Current midpoint without grid rounding; null when absent.
+   * @throws For invalid coordinates/options.
+   */
+  getEdgeMidpoint(edge: EdgeInput<N, E>): Point2D | null {
+    return this.getEdge(edge)?.midpoint ?? null;
+  }
+
+  /**
+   * Current geometric length independent of metadata; null when absent.
+   * @throws For invalid coordinates/options.
+   */
+  getEdgeLength(edge: EdgeInput<N, E>): number | null {
+    const key = this.edgeKey(edge);
+    return key === undefined ? null : distance(...this.segment(key));
+  }
+
+  /** Copied current edge metadata; null when absent. @throws For invalid coordinates/options. */
+  getEdgeAttributes(edge: EdgeInput<N, E>): Readonly<E> | null {
+    const key = this.edgeKey(edge);
+
+    if (key === undefined) {
+      return null;
+    }
+
+    const attributes = this.#graph.getEdgeAttributes(key).data;
+    return Object.freeze(this.cloneEdge(attributes));
+  }
+
+  /** Merge into an existing edge; null when absent. @throws For invalid coordinates/options. */
+  mergeEdgeAttributes(edge: EdgeInput<N, E>, attributes: Partial<E>): SpatialEdge<N, E> | null {
+    return this.guarded(() => {
+      const key = this.edgeKey(edge);
+
+      if (key === undefined) {
+        return null;
+      }
+
+      const data = this.cloneEdge({
+        ...this.#graph.getEdgeAttributes(key).data,
+        ...copyData(attributes),
+      });
+      this.snapshotEdgeCopy(data);
+      for (const node of this.#graph.extremities(key)) {
+        this.snapshotNodeCopy(this.#graph.getNodeAttributes(node).data);
+      }
+      this.#graph.replaceEdgeAttributes(key, { data });
+      this.currentRevision++;
+      return this.edgeSnapshot(key);
+    });
+  }
+
+  /**
+   * Remove an edge, leaving endpoints; false when absent.
+   * @throws For invalid coordinates/options.
+   */
+  removeEdge(edge: EdgeInput<N, E>): boolean {
+    return this.removeEdges([edge]) > 0;
+  }
+
+  /** Atomic removal; number of existing edges removed. @throws For invalid coordinates. */
+  removeEdges(edges: readonly EdgeInput<N, E>[]): number {
+    return this.guarded(() => {
+      const plan = emptyPlan<N, E>();
+      plan.removeEdges = [
+        ...new Set(
+          edges.map((edge) => this.edgeKey(edge)).filter((key): key is string => key !== undefined),
+        ),
+      ];
+      this.apply(plan);
+      return plan.removeEdges.length;
+    });
+  }
+
+  /** Clear all nodes and edges; graph metadata and coordinate policy remain. */
+  clear(): void {
+    this.guarded(() => {
+      if (this.nodeCount) {
+        this.#graph.clear();
+        this.#nodeIndex.clear();
+        this.#edgeIndex.clear();
+        this.currentRevision++;
+      }
+    });
+  }
+
+  /**
+   * Move simultaneously, removing/recreating positions.
+   * @throws Before mutation for missing sources or conflicting destinations.
+   */
+  moveNodes(
+    moves: readonly (readonly [NodeInput<N>, Point2D])[],
+    options: ConflictOptions<N, E> = {},
+  ): MutationReport {
+    return this.guarded(() => {
+      const destinations = new Map<string, Point2D>();
+
+      for (const [source, target] of moves) {
+        const key = this.keyOf(source);
+        const point = this.canonical(target);
+
+        if (!this.#graph.hasNode(key)) {
+          throw new Error('Move source does not exist; addNode first or check hasNode.');
+        }
+
+        const previous = destinations.get(key);
+
+        if (previous && pointKey(previous) !== pointKey(point)) {
+          throw new Error('One source has conflicting destinations; provide one target per node.');
+        }
+        destinations.set(key, point);
+      }
+      for (const [key, point] of destinations) {
+        if (key === pointKey(point)) {
+          destinations.delete(key);
         }
       }
+
+      const { plan, report } = planMoves(this.#graph, destinations, options);
+      this.apply(plan);
+      return report;
     });
+  }
 
-    return stubs;
+  /** Move one node; coordinates define identity. @throws If source is missing or input invalid. */
+  moveNode(
+    node: NodeInput<N>,
+    target: Point2D,
+    options: ConflictOptions<N, E> = {},
+  ): MutationReport {
+    return this.moveNodes([[node, target]], options);
+  }
+
+  /** Merge source into target using the move conflict policy. @throws If source is missing. */
+  mergeNodeInto(
+    source: NodeInput<N>,
+    target: NodeInput<N>,
+    options: ConflictOptions<N, E> = {},
+  ): MutationReport {
+    return this.moveNode(source, this.pointOfInput(target), options);
   }
 
   /**
-   * Check if a point is a stub (dead end)
+   * Split only on the exact and canonical segment; missing/endpoint splits are no-ops.
+   * @throws For off-edge points or invalid callback data before mutation.
    */
-  isStub(point: NxPoint): boolean {
-    const key = this.nodeKey(point);
-    return this.hasNode(key) && this.degree(key) === STUB_DEGREE;
-  }
+  splitEdge(
+    input: EdgeInput<N, E>,
+    point: Point2D,
+    options: SplitOptions<N, E> = {},
+  ): SplitResult<N, E> {
+    return this.guarded(() => {
+      canonicalPoint(point, null);
+      const key = this.edgeKey(input);
 
-  /**
-   * Whether any two edges at this node are perpendicular, within `toleranceDeg`
-   * degrees of 90 (default 10). `false` for a node
-   * with fewer than two edges or a point that is not a node.
-   */
-  hasOrthogonalEdges(node: NxPoint, toleranceDeg = DEFAULT_ANGLE_TOLERANCE_DEG): boolean {
-    const key = this.nodeKey(node);
-    if (!this.hasNode(key)) return false;
-
-    const neighbors = this.neighbors(key);
-    if (neighbors.length < 2) return false;
-
-    // Get all edges connected to this node
-    const edges: Segment[] = [];
-    neighbors.forEach((neighbor) => {
-      const neighborPoint = this.parseNode(neighbor);
-      if (neighborPoint) {
-        edges.push(toFlattenSegment([node, neighborPoint]));
+      if (key === undefined) {
+        return { changed: false, reason: 'missing', node: null, removed: null, edges: [] };
       }
-    });
 
-    // Check all pairs of edges for orthogonality
-    for (let i = 0; i < edges.length; i++) {
-      for (let j = i + 1; j < edges.length; j++) {
-        const edge1 = edges[i];
-        const edge2 = edges[j];
-        if (!edge1 || !edge2) continue;
+      const segment = this.segment(key);
+      const canonical = this.canonical(point);
+      const nodeKey = pointKey(canonical);
 
-        const angle = getLinesAngleByCross(edge1, edge2);
-        const isRightAngle = Math.abs(angle - RIGHT_ANGLE_DEG) <= toleranceDeg;
-
-        if (isRightAngle) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * Get all nodes where at least two edges are perpendicular;
-   * see {@link SpatialGraph.hasOrthogonalEdges}.
-   */
-  getNodesWithOrthogonalEdges(toleranceDeg = DEFAULT_ANGLE_TOLERANCE_DEG): NxPoint[] {
-    const nodes: NxPoint[] = [];
-
-    this.forEachNode((node) => {
-      const point = this.parseNode(node);
-      if (point && this.hasOrthogonalEdges(point, toleranceDeg)) {
-        nodes.push(point);
-      }
-    });
-
-    return nodes;
-  }
-
-  /**
-   * Find the edge closest to a point (perpendicular distance to the segment).
-   * Linear in the number of edges.
-   *
-   * @throws Error when the graph has no edges. Check `graph.size > 0` first.
-   */
-  findNearestEdge(point: NxPoint | Point): Segment {
-    const p = point instanceof Point ? point : toFlattenPoint(point);
-    const edges = this.getSegments();
-
-    if (edges.length === 0) {
-      throw new Error(NO_EDGES_MESSAGE);
-    }
-
-    let nearestEdge: Segment | null = edges[0] || null;
-    if (!nearestEdge) {
-      throw new Error(NO_EDGES_MESSAGE);
-    }
-
-    let minDistance = nearestEdge.distanceTo(p)[0];
-
-    for (let i = 1; i < edges.length; i++) {
-      const edge = edges[i];
-      if (!edge) continue;
-
-      const distance = edge.distanceTo(p)[0];
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestEdge = edge;
-      }
-    }
-
-    return nearestEdge;
-  }
-
-  /**
-   * Snap a point onto the closest edge.
-   *
-   * @returns `[projected, edge]`: the closest point on the network (grid-snapped)
-   *   and the edge it lies on.
-   * @throws Error when the graph has no edges.
-   */
-  projectPointOnClosestEdge(point: NxPoint): [NxPoint, NxEdge] {
-    const nearestEdge = this.findNearestEdge(point);
-    const projectedPoint = projectPointOnSegment(point, nearestEdge);
-    const edge = fromFlattenSegment(nearestEdge);
-
-    return [projectedPoint, edge];
-  }
-
-  /**
-   * Get the node closest to a point. Linear in the number of nodes.
-   *
-   * @throws Error when the graph has no nodes.
-   */
-  getClosestNodeToPoint(point: Point | NxPoint): NxPoint {
-    const p = point instanceof Point ? point : toFlattenPoint(point);
-    const nodes = this.getNodes();
-
-    if (nodes.length === 0) {
-      throw new Error(NO_NODES_MESSAGE);
-    }
-
-    let closestNode: NxPoint | null = nodes[0] || null;
-    if (!closestNode) {
-      throw new Error(NO_NODES_MESSAGE);
-    }
-
-    let minDistance = toFlattenPoint(closestNode).distanceTo(p)[0];
-
-    for (let i = 1; i < nodes.length; i++) {
-      const node = nodes[i];
-      if (!node) continue;
-
-      const distance = toFlattenPoint(node).distanceTo(p)[0];
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestNode = node;
-      }
-    }
-
-    return closestNode;
-  }
-
-  /**
-   * Get the shortest path between two nodes, weighted by edge length.
-   *
-   * @returns The path as consecutive segments from `start` to `end`. An empty
-   *   array when either point is not a node, the two are the same node, or no
-   *   route connects them; it never throws.
-   */
-  getShortestPath(start: NxPoint, end: NxPoint): Segment[] {
-    const startKey = this.nodeKey(start);
-    const endKey = this.nodeKey(end);
-
-    if (!this.hasNode(startKey) || !this.hasNode(endKey)) {
-      return [];
-    }
-
-    // Bidirectional Dijkstra over the edge `weight` (segment length)
-    const path = dijkstra.bidirectional(this, startKey, endKey, 'weight');
-
-    if (!path || path.length < 2) {
-      return [];
-    }
-
-    // Convert path nodes to segments
-    const segments: Segment[] = [];
-    for (let i = 0; i < path.length - 1; i++) {
-      const pathNode1 = path[i];
-      const pathNode2 = path[i + 1];
-      if (!pathNode1 || !pathNode2) continue;
-
-      const p1 = this.parseNode(pathNode1);
-      const p2 = this.parseNode(pathNode2);
-
-      if (p1 && p2) {
-        segments.push(toFlattenSegment([p1, p2]));
-      }
-    }
-
-    return segments;
-  }
-
-  /**
-   * Build a new graph from the edges whose attribute `attrName` strictly equals
-   * `attrValue`. Node attributes are not copied.
-   */
-  getSubgraph(attrName: string, attrValue: unknown): SpatialGraph {
-    const subgraph = new SpatialGraph();
-
-    this.forEachEdge((edge, attrs, source, target) => {
-      if (attrs[attrName] === attrValue) {
-        const start = this.parseNode(source);
-        const end = this.parseNode(target);
-
-        if (start && end) {
-          subgraph.addEdgeWithAttrs(start, end, attrs);
-        }
-      }
-    });
-
-    return subgraph;
-  }
-
-  /**
-   * Get the nodes for which `filterPredicate(point, attributes)` is true.
-   */
-  getFilteredNodes(filterPredicate: FilterPredicate): NxPoint[] {
-    const nodes: NxPoint[] = [];
-
-    this.forEachNode((node, attrs) => {
-      const point = this.parseNode(node);
-      if (point && filterPredicate(point, attrs)) {
-        nodes.push(point);
-      }
-    });
-
-    return nodes;
-  }
-
-  /**
-   * Move a node to a new position; its edges follow it. Moving onto an existing
-   * node merges the two.
-   *
-   * @throws Error when `node` is not in the graph.
-   */
-  moveNode(node: NxPoint, newNode: NxPoint): void {
-    this.moveNodes([[node, newNode]]);
-  }
-
-  /**
-   * Move multiple nodes at once
-   *
-   * All targets are resolved before the graph changes, so the moves apply
-   * simultaneously: in `[[a, b], [b, c]]` node `a` lands on `b`'s old position
-   * while `b` moves on to `c`, instead of `a` first collapsing into `b`.
-   * A node moved onto an existing node is merged into it.
-   *
-   * @throws Error before any change if a source node does not exist.
-   */
-  moveNodes(nodesToMove: Array<[NxPoint, NxPoint]>): void {
-    const moves = new Map<string, NxPoint>();
-    for (const [node, newNode] of nodesToMove) {
-      const oldKey = this.nodeKey(node);
-      if (!this.hasNode(oldKey)) {
+      if (
+        projectPoint(point, segment).distance > this.positionTolerance ||
+        projectPoint(canonical, segment).distance > this.positionTolerance
+      ) {
         throw new Error(
-          `Node [${node[0]}, ${node[1]}] does not exist. Add it with addVertex(), or check hasPointNode() first.`,
+          'Split point is off the edge or moves off it after quantization; use an on-edge point or adjust precision/positionTolerance.',
         );
       }
-      if (!pointsEqual(node, newNode)) {
-        moves.set(oldKey, newNode);
+
+      const edge = this.edgeSnapshot(key);
+
+      if (this.#graph.extremities(key).includes(nodeKey)) {
+        return {
+          changed: false,
+          reason: 'endpoint',
+          node: this.nodeSnapshot(nodeKey),
+          removed: null,
+          edges: [edge],
+        };
       }
-    }
 
-    if (moves.size === 0) {
-      return; // No movement needed
-    }
-
-    // Snapshot moved nodes and every edge touching them
-    const movedNodes: Array<{ target: NxPoint; attrs: NodeAttributes }> = [];
-    const edgeData: Array<{ source: string; target: string; attrs: EdgeAttributes }> = [];
-    const seenEdges = new Set<string>();
-
-    moves.forEach((target, oldKey) => {
-      movedNodes.push({ target, attrs: this.getNodeAttributes(oldKey) });
-      this.forEachEdge(oldKey, (edgeKey, attrs, source, edgeTarget) => {
-        if (seenEdges.has(edgeKey)) return;
-        seenEdges.add(edgeKey);
-        edgeData.push({ source, target: edgeTarget, attrs });
-      });
-    });
-
-    moves.forEach((_, oldKey) => this.dropNode(oldKey));
-
-    // Add new nodes or merge attrs into an existing collapse target.
-    movedNodes.forEach(({ target, attrs }) => {
-      const newKey = this.nodeKey(target);
-      if (!this.hasNode(newKey)) {
-        this.addNode(newKey, attrs);
-      } else {
-        const targetAttrs = this.getNodeAttributes(newKey);
-        this.replaceNodeAttributes(newKey, { ...attrs, ...targetAttrs });
+      const plan = emptyPlan<N, E>();
+      plan.removeEdges = [key];
+      if (!this.#graph.hasNode(nodeKey)) {
+        plan.nodes.set(nodeKey, { x: canonical[0], y: canonical[1], data: this.newNodeData() });
       }
-    });
 
-    // Recreate edges between the new endpoint positions
-    const positionOf = (key: string): NxPoint | null => moves.get(key) ?? this.parseNode(key);
-    edgeData.forEach(({ source, target, attrs }) => {
-      const start = positionOf(source);
-      const end = positionOf(target);
-      if (start && end) {
-        this.addEdgeWithAttrs(start, end, attrs);
-      }
-    });
-  }
-
-  /**
-   * Merge `source` into `target`: the source node is removed and its edges are
-   * rewired to the target, which is created when missing. Attributes are merged
-   * with the target's winning. Does nothing when `source` is not a node.
-   */
-  collapsePointInto(source: NxPoint, target: NxPoint): void {
-    const sourceKey = this.nodeKey(source);
-    const targetKey = this.nodeKey(target);
-
-    if (!this.hasNode(sourceKey) || pointsEqual(source, target)) {
-      return;
-    }
-
-    const targetPoint = roundPoint(target);
-    const sourceAttrs = this.getNodeAttributes(sourceKey);
-    const targetAttrs = this.hasNode(targetKey) ? this.getNodeAttributes(targetKey) : {};
-    const edgeData = this.neighbors(sourceKey).flatMap((neighbor) => {
-      const edgeKey = this.edge(sourceKey, neighbor);
-      const neighborPoint = this.parseNode(neighbor);
-      if (!edgeKey || !neighborPoint) return [];
-
-      return [
-        {
-          neighbor,
-          neighborPoint,
-          attrs: this.getEdgeAttributes(edgeKey),
-        },
+      const parts: Segment2D[] = [
+        [segment[0], canonical],
+        [canonical, segment[1]],
       ];
+      parts.forEach((endpoints, index) => {
+        validateSegment(endpoints);
+        const [source, target] = endpoints.map(pointKey) as [string, string];
+        const existing =
+          this.#graph.hasNode(source) && this.#graph.hasNode(target)
+            ? this.#graph.edge(source, target)
+            : undefined;
+        const data = this.cloneEdge(
+          options.splitAttributes
+            ? options.splitAttributes(edge, endpoints, index as 0 | 1)
+            : this.#graph.getEdgeAttributes(key).data,
+        );
+        plan.edges.push({
+          key: existing,
+          source,
+          target,
+          data:
+            existing === undefined
+              ? data
+              : mergeData(
+                  this.#graph.getEdgeAttributes(existing).data,
+                  data,
+                  options.mergeEdgeAttributes,
+                ),
+        });
+      });
+      this.apply(plan);
+      return {
+        changed: true,
+        node: this.nodeSnapshot(nodeKey),
+        removed: edge,
+        edges: parts.map((part) => this.getEdge(part)!),
+      };
     });
+  }
 
-    this.dropNode(sourceKey);
+  private join(
+    node: NodeInput<N>,
+    options: JoinOptions<N, E>,
+    allowBend: boolean,
+  ): JoinResult<N, E> {
+    const key = this.keyOf(node);
 
-    if (!this.hasNode(targetKey)) {
-      this.addNode(targetKey, sourceAttrs);
-    } else {
-      this.replaceNodeAttributes(targetKey, { ...sourceAttrs, ...targetAttrs });
+    if (!this.#graph.hasNode(key)) {
+      return { changed: false, reason: 'missing', edge: null };
+    }
+    if (this.#graph.degree(key) !== 2) {
+      return { changed: false, reason: 'degree', edge: null };
+    }
+    if (!allowBend && this.nodeSnapshot(key).type !== 'intermediate') {
+      return { changed: false, reason: 'bend', edge: null };
     }
 
-    edgeData.forEach(({ neighbor, neighborPoint, attrs }) => {
-      if (neighbor === targetKey) return;
+    const [a, b] = this.#graph.neighbors(key) as [string, string];
 
-      const existingEdgeKey = this.edge(targetKey, neighbor);
-      if (existingEdgeKey) {
-        const existingAttrs = this.getEdgeAttributes(existingEdgeKey);
-        this.replaceEdgeAttributes(existingEdgeKey, { ...attrs, ...existingAttrs });
-        return;
+    if (!allowBend && this.#graph.hasEdge(a, b)) {
+      return {
+        changed: false,
+        reason: 'connected',
+        edge: this.edgeSnapshot(this.#graph.edge(a, b)!),
+      };
+    }
+
+    const incident = this.#graph
+      .edges(key)
+      .sort((x, y) =>
+        compareKeys(pairKey(...this.#graph.extremities(x)), pairKey(...this.#graph.extremities(y))),
+      );
+    const [first, second] = incident.map((edge) => this.edgeSnapshot(edge)) as [
+      SpatialEdge<N, E>,
+      SpatialEdge<N, E>,
+    ];
+    const data = this.cloneEdge(
+      options.joinAttributes
+        ? options.joinAttributes(first, second)
+        : mergeData(first.attributes as E, second.attributes as E),
+    );
+    validateSegment([
+      pointOf(this.#graph.getNodeAttributes(a)),
+      pointOf(this.#graph.getNodeAttributes(b)),
+    ]);
+    const existing = this.#graph.edge(a, b);
+    const plan = emptyPlan<N, E>();
+    plan.removeNodes = [key];
+    plan.edges.push({
+      key: existing,
+      source: a,
+      target: b,
+      data:
+        existing === undefined
+          ? data
+          : mergeData(this.#graph.getEdgeAttributes(existing).data, data),
+    });
+    this.apply(plan);
+    return {
+      changed: true,
+      edge: this.getEdgeBetween(
+        pointOf(this.#graph.getNodeAttributes(a)),
+        pointOf(this.#graph.getNodeAttributes(b)),
+      ),
+    };
+  }
+
+  /**
+   * Join a straight degree-2 node; reports why unsafe joins are skipped.
+   * @throws For invalid coordinates/options.
+   */
+  joinNode(node: NodeInput<N>, options: JoinOptions<N, E> = {}): JoinResult<N, E> {
+    return this.guarded(() => this.join(node, options, false));
+  }
+
+  /**
+   * Explicitly replace a degree-2 bend/triangle by a direct neighbor edge.
+   * @throws For invalid coordinates/options.
+   */
+  collapseDegree2Node(node: NodeInput<N>, options: JoinOptions<N, E> = {}): JoinResult<N, E> {
+    return this.guarded(() => this.join(node, options, true));
+  }
+
+  /**
+   * Indexed exact nearest node; null for an empty graph. Pass scan to compare the reference
+   * algorithm.
+   * @throws For invalid coordinates/options.
+   */
+  findNearestNode(
+    point: Point2D,
+    options: {
+      scan?: boolean;
+    } = {},
+  ): SpatialNode<N> | null {
+    canonicalPoint(point, null);
+
+    const evaluate = (key: string) => distance(point, pointOf(this.#graph.getNodeAttributes(key)));
+
+    const key = options.scan
+      ? nearestKey(this.#graph.nodes(), evaluate)
+      : this.#nodeIndex.nearest(point, evaluate);
+    return key === null ? null : this.nodeSnapshot(key);
+  }
+
+  /**
+   * Indexed exact nearest segment/projection; null for no edges. Geometry is never snapped to the
+   * grid.
+   * @throws For invalid coordinates/options.
+   */
+  findNearestEdge(
+    point: Point2D,
+    options: {
+      scan?: boolean;
+    } = {},
+  ): NearestEdgeResult<N, E> | null {
+    canonicalPoint(point, null);
+
+    const evaluate = (key: string) => projectPoint(point, this.segment(key)).distance;
+
+    const key = options.scan
+      ? nearestKey(this.#graph.edges(), evaluate)
+      : this.#edgeIndex.nearest(point, evaluate);
+    if (key === null) {
+      return null;
+    }
+
+    const projection = projectPoint(point, this.segment(key));
+    return { edge: this.edgeSnapshot(key), ...projection, point: freezePoint(projection.point) };
+  }
+
+  /** Graphology DFS component snapshots, including isolated nodes; [] for an empty graph. */
+  getConnectedComponents(): SpatialNode<N>[][] {
+    return connectedComponents(this.#graph).map((keys) =>
+      keys.map((key) => this.nodeSnapshot(key)),
+    );
+  }
+
+  private traversalVisitor(callback: TraversalCallback<N>) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('Traversal callback must be a function; pass (node, depth) => { ... }.');
+    }
+
+    return (key: string, _attributes: StoredNode<N>, depth: number) =>
+      callback(this.nodeSnapshot(key), depth);
+  }
+
+  /**
+   * Graphology BFS over all nodes, including isolated nodes; no visits for an empty graph.
+   * Depth resets to zero at each traversal root. Returning true skips this node's expansion.
+   * @throws For an invalid callback, callback failure, or mutation/nested traversal in callbacks.
+   */
+  bfs(callback: TraversalCallback<N>): void {
+    this.guarded(() => graphologyBfs(this.#graph, this.traversalVisitor(callback)));
+  }
+
+  /**
+   * Graphology BFS from a node at depth zero; no visits when the start node is missing.
+   * Depth counts hops from the start. Returning true skips this node's expansion.
+   * @throws For invalid coordinates/callbacks, callback failure, or mutation/nested traversal in callbacks.
+   */
+  bfsFromNode(node: NodeInput<N>, callback: TraversalCallback<N>): void {
+    this.guarded(() => {
+      const visit = this.traversalVisitor(callback);
+      const key = this.keyOf(node);
+
+      if (this.#graph.hasNode(key)) {
+        graphologyBfsFromNode(this.#graph, key, visit);
       }
-
-      this.addEdgeWithAttrs(targetPoint, neighborPoint, attrs);
     });
   }
 
   /**
-   * Remove a dead-end node (degree 1) and its edge. Does nothing for any other node.
+   * Graphology DFS over all nodes, including isolated nodes; no visits for an empty graph.
+   * Depth is discovery depth, reset at each root. Returning true skips this node's expansion.
+   * @throws For an invalid callback, callback failure, or mutation/nested traversal in callbacks.
    */
-  removeStubPoint(point: NxPoint): void {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key) || this.degree(key) !== STUB_DEGREE) {
-      return;
-    }
-
-    this.dropNode(key);
+  dfs(callback: TraversalCallback<N>): void {
+    this.guarded(() => graphologyDfs(this.#graph, this.traversalVisitor(callback)));
   }
 
   /**
-   * Remove a pass-through node (degree 2) and join its two neighbors with one
-   * edge. Does nothing for any other node. `attrs` replaces the joined edge's
-   * attributes; by default the two removed edges' attributes are merged.
+   * Graphology DFS from a node at depth zero; no visits when the start node is missing.
+   * Depth is discovery depth, not minimum hops. Returning true skips this node's expansion.
+   * @throws For invalid coordinates/callbacks, callback failure, or mutation/nested traversal in callbacks.
    */
-  removeDegree2PointAndJoin(point: NxPoint, attrs?: Partial<EdgeAttributes>): void {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key) || this.degree(key) !== 2) {
-      return;
-    }
+  dfsFromNode(node: NodeInput<N>, callback: TraversalCallback<N>): void {
+    this.guarded(() => {
+      const visit = this.traversalVisitor(callback);
+      const key = this.keyOf(node);
 
-    const neighbors = this.neighbors(key);
-    const firstNeighbor = neighbors[0];
-    const secondNeighbor = neighbors[1];
-    if (!firstNeighbor || !secondNeighbor) {
-      return;
-    }
-
-    const firstPoint = this.parseNode(firstNeighbor);
-    const secondPoint = this.parseNode(secondNeighbor);
-    if (!firstPoint || !secondPoint || firstNeighbor === secondNeighbor) {
-      return;
-    }
-
-    const firstEdgeKey = this.edge(key, firstNeighbor);
-    const secondEdgeKey = this.edge(key, secondNeighbor);
-    const firstAttrs = firstEdgeKey ? this.getEdgeAttributes(firstEdgeKey) : {};
-    const secondAttrs = secondEdgeKey ? this.getEdgeAttributes(secondEdgeKey) : {};
-    const joinedAttrs = attrs ?? { ...firstAttrs, ...secondAttrs };
-    const hasJoinedEdge = this.hasEdge(firstNeighbor, secondNeighbor);
-
-    this.dropNode(key);
-
-    if (hasJoinedEdge) {
-      return;
-    }
-
-    this.addEdgeWithAttrs(firstPoint, secondPoint, joinedAttrs);
-  }
-
-  /** Weight (length) of an edge; `0` when there is no such edge. */
-  getEdgeWeight(edge: NxEdge): number {
-    return this.getEdgeAttributesFor(edge)?.weight ?? 0;
-  }
-
-  /** The heaviest edge along a node path; `null` for a path of fewer than two points. */
-  getLongestEdgeInPath(path: NxPoint[]): NxEdge | null {
-    if (path.length < 2) return null;
-
-    let longestEdge: NxEdge | null = null;
-    let longestWeight = -Infinity;
-
-    for (let index = 0; index < path.length - 1; index += 1) {
-      const start = path[index];
-      const end = path[index + 1];
-      if (!start || !end) continue;
-
-      const edge: NxEdge = [start, end];
-      const weight = this.getEdgeWeight(edge);
-      if (weight > longestWeight) {
-        longestWeight = weight;
-        longestEdge = edge;
+      if (this.#graph.hasNode(key)) {
+        graphologyDfsFromNode(this.#graph, key, visit);
       }
-    }
-
-    return longestEdge;
+    });
   }
 
-  /** Total weight of the edges along a node path. Missing edges count as `0`. */
-  getPathLength(path: NxPoint[]): number {
+  private path(
+    nodes: readonly string[],
+    edges: readonly string[],
+    cost?: number,
+  ): SpatialPath<N, E> {
+    const cache = new Map<string, SpatialNode<N>>();
+    const snapshots = edges.map((key) => this.edgeSnapshot(key, cache));
+    const length = snapshots.reduce((sum, edge) => sum + edge.length, 0);
+    return {
+      nodes: nodes.map((key) => this.nodeSnapshot(key, cache)),
+      edges: snapshots,
+      length,
+      cost: cost ?? length,
+      closed: nodes.length > 1 && nodes[0] === nodes.at(-1),
+    };
+  }
+
+  /** Maximal chains and cycles covering each edge exactly once. */
+  findPaths(): SpatialPath<N, E>[] {
+    return decompose(this.#graph).map((path) => this.path(path.nodes, path.edges));
+  }
+
+  /**
+   * Edge-once chains/cycles within an induced subset; degrees are measured within it.
+   * @throws For invalid coordinates/options.
+   */
+  findTerminalPaths(subset?: readonly NodeInput<N>[]): SpatialPath<N, E>[] {
+    const keys = subset && new Set(subset.map((node) => this.keyOf(node)));
+    return decompose(this.#graph, keys).map((path) => this.path(path.nodes, path.edges));
+  }
+
+  /**
+   * Graphology Dijkstra or reopening A*. Missing/disconnected endpoints return null.
+   * Uses private adjacency directly unless null-cost edges require a filtered copy.
+   * @throws For invalid costs/heuristics, overflowing total cost or mutation from callbacks.
+   */
+  getShortestPath(
+    a: NodeInput<N>,
+    b: NodeInput<N>,
+    options: PathOptions<N, E> = {},
+  ): SpatialPath<N, E> | null {
+    return this.guarded(() => {
+      const start = this.keyOf(a);
+      const goal = this.keyOf(b);
+      const algorithm = options.algorithm ?? PathAlgorithm.Dijkstra;
+
+      if (!this.#graph.hasNode(start) || !this.#graph.hasNode(goal)) {
+        return null;
+      }
+      if (algorithm !== PathAlgorithm.Dijkstra && algorithm !== PathAlgorithm.AStar) {
+        throw new Error('Unknown algorithm; choose PathAlgorithm.Dijkstra or PathAlgorithm.AStar.');
+      }
+      if (options.heuristic && algorithm !== PathAlgorithm.AStar) {
+        throw new Error('A heuristic requires algorithm: PathAlgorithm.AStar.');
+      }
+
+      const costs = new Map<string, number | null>();
+
+      for (const key of this.#graph.edges()) {
+        const cost = options.cost
+          ? options.cost(this.edgeSnapshot(key))
+          : distance(...this.segment(key));
+        if (cost !== null && (!Number.isFinite(cost) || cost < 0)) {
+          throw new RangeError(
+            'Edge cost must be finite and nonnegative, or null to close an edge.',
+          );
+        }
+        costs.set(key, cost);
+      }
+
+      const heuristics = new Map<string, number>();
+      const goalNode = this.nodeSnapshot(goal);
+
+      for (const key of this.#graph.nodes()) {
+        let heuristic = 0;
+
+        if (algorithm === PathAlgorithm.AStar) {
+          if (options.heuristic) {
+            heuristic = options.heuristic(this.nodeSnapshot(key), goalNode);
+          } else if (!options.cost) {
+            heuristic = distance(pointOf(this.#graph.getNodeAttributes(key)), goalNode.point);
+          }
+        }
+
+        if (!Number.isFinite(heuristic) || heuristic < 0 || (key === goal && heuristic !== 0)) {
+          throw new RangeError(
+            'Heuristic must be finite, nonnegative, and zero at the destination.',
+          );
+        }
+        heuristics.set(key, heuristic);
+      }
+
+      const result = shortestPath(this.#graph, start, goal, costs, algorithm, heuristics);
+      return result && this.path(result.nodes, result.edges, result.cost);
+    });
+  }
+
+  /**
+   * Length of a valid graph walk; null when a node/edge is absent, zero for an empty walk.
+   * @throws For invalid coordinates/options.
+   */
+  getPathLength(nodes: readonly NodeInput<N>[]): number | null {
+    const keys = nodes.map((node) => this.keyOf(node));
+
+    if (keys.some((key) => !this.#graph.hasNode(key))) {
+      return null;
+    }
+
     let length = 0;
 
-    for (let index = 0; index < path.length - 1; index += 1) {
-      const start = path[index];
-      const end = path[index + 1];
-      if (start && end) {
-        length += this.getEdgeWeight([start, end]);
+    for (let i = 1; i < keys.length; i++) {
+      if (keys[i] === keys[i - 1]) {
+        continue;
       }
+
+      const edge = this.#graph.edge(keys[i - 1], keys[i]);
+
+      if (edge === undefined) {
+        return null;
+      }
+      length += distance(...this.segment(edge));
     }
 
     return length;
   }
 
-  /**
-   * Plan a move that flattens a node path onto `line`: each node is projected
-   * onto the line. Stops at the first edge whose projection is shorter than
-   * `MIN_EDGE_MOVEMENT_DISTANCE`, and skips edges that would flip direction.
-   *
-   * @returns `[from, to]` pairs ready for {@link SpatialGraph.moveNodes}.
-   */
-  calculatedMovement(path: NxPoint[], line: Segment): Array<[NxPoint, NxPoint]> {
-    const nodesToMove: Array<[NxPoint, NxPoint]> = [];
-
-    for (let index = 0; index < path.length - 1; index += 1) {
-      const start = path[index];
-      const end = path[index + 1];
-      if (!start || !end) continue;
-
-      const [newStart, newEnd] = projectEdgeToLine([start, end], line);
-      if (
-        toFlattenPoint(newStart).distanceTo(toFlattenPoint(newEnd))[0] < MIN_EDGE_MOVEMENT_DISTANCE
-      ) {
-        break;
-      }
-
-      const movedSegment = toFlattenSegment([newStart, newEnd]);
-      if (getLinesDot(movedSegment, line) < 0) {
-        continue;
-      }
-
-      if (nodesToMove.length === 0) {
-        nodesToMove.push([start, newStart]);
-      }
-      nodesToMove.push([end, newEnd]);
-    }
-
-    return nodesToMove;
-  }
-
-  /**
-   * Trace open branches: chains that start at a dead end and follow degree-2
-   * nodes until they reach a node that is not pass-through (a junction or
-   * another dead end). Only `nodesSubset` is considered when given (default: the
-   * whole graph), and degrees are counted within that subset.
-   *
-   * @returns Each path as a node list, starting at its dead end.
-   */
-  findIsolatedPaths(nodesSubset?: NxPoint[]): NxPoint[][] {
-    const allowedKeys = nodesSubset ? new Set(nodesSubset.map((node) => this.nodeKey(node))) : null;
-    const allowed = (key: string) => !allowedKeys || allowedKeys.has(key);
-    const degreeWithin = (key: string) => this.neighbors(key).filter(allowed).length;
-    const visitedEdgeKeys = new Set<string>();
-    const paths: NxPoint[][] = [];
-    const nodeKeys = this.nodes().filter(allowed);
-    const starts = nodeKeys.filter((key) => degreeWithin(key) <= 1);
-
-    for (const start of starts) {
-      for (const neighbor of this.neighbors(start).filter(allowed)) {
-        const edgeKey = orderedNodePairKey(start, neighbor);
-        if (visitedEdgeKeys.has(edgeKey)) continue;
-
-        const pathKeys = [start];
-        let previous: string | null = null;
-        let current = start;
-        let next: string | null = neighbor;
-
-        while (next) {
-          visitedEdgeKeys.add(orderedNodePairKey(current, next));
-          previous = current;
-          current = next;
-          pathKeys.push(current);
-
-          const candidates = this.neighbors(current).filter((candidate) => {
-            if (!allowed(candidate) || candidate === previous) return false;
-            return !visitedEdgeKeys.has(orderedNodePairKey(current, candidate));
-          });
-
-          if (degreeWithin(current) !== 2 || candidates.length === 0) {
-            break;
-          }
-          next = candidates[0] ?? null;
-        }
-
-        const path = pathKeys.flatMap((key) => {
-          const point = this.parseNode(key);
-          return point ? [point] : [];
-        });
-        if (path.length > 1) paths.push(path);
-      }
-    }
-
-    return paths;
-  }
-
-  /**
-   * Decompose the graph into simple paths that start and end at nodes that are
-   * not pass-through (degree 1, or 3 and up). Every edge is in exactly one path;
-   * a pure cycle comes back as one closed path.
-   *
-   * @returns Each path as a node list.
-   */
-  findPaths(): NxPoint[][] {
-    const visitedEdgeKeys = new Set<string>();
-    const paths: NxPoint[][] = [];
-    const nodeKeys = this.nodes();
-    const branchKeys = nodeKeys.filter((key) => this.degree(key) !== 2);
-
-    for (const start of branchKeys) {
-      for (const neighbor of this.neighbors(start)) {
-        if (visitedEdgeKeys.has(orderedNodePairKey(start, neighbor))) continue;
-
-        const path = this.walkPath(start, neighbor, visitedEdgeKeys);
-        if (path.length > 1) {
-          paths.push(path);
-        }
-      }
-    }
-
-    for (const edge of this.edges()) {
-      const [source, target] = this.extremities(edge);
-      if (!source || !target || visitedEdgeKeys.has(orderedNodePairKey(source, target))) continue;
-
-      const path = this.walkPath(source, target, visitedEdgeKeys);
-      if (path.length > 1) {
-        paths.push(path);
-      }
-    }
-
-    return paths;
-  }
-
-  private walkPath(start: string, next: string, visitedEdgeKeys: Set<string>): NxPoint[] {
-    const pathKeys = [start];
-    let previous = start;
-    let current: string | null = next;
-
-    while (current) {
-      visitedEdgeKeys.add(orderedNodePairKey(previous, current));
-      pathKeys.push(current);
-
-      if (current === start || this.degree(current) !== 2) {
-        break;
-      }
-
-      const currentKey: string = current;
-      const nextCandidate: string | undefined = this.neighbors(currentKey).find(
-        (neighbor) =>
-          neighbor !== previous && !visitedEdgeKeys.has(orderedNodePairKey(currentKey, neighbor)),
-      );
-
-      previous = current;
-      current = nextCandidate ?? null;
-    }
-
-    return pathKeys.flatMap((key) => {
-      const point = this.parseNode(key);
-      return point ? [point] : [];
-    });
-  }
-
-  /**
-   * Split an edge at a point: the edge is replaced by two edges meeting at
-   * `point`, both inheriting its attributes. Does nothing when the edge does not
-   * exist or `point` is one of its endpoints. `point` is not required to lie on
-   * the edge.
-   */
-  splitEdge(edge: NxEdge, point: NxPoint): void {
-    if (!this.findEdgeKey(edge[0], edge[1])) {
-      return;
-    }
-
-    const node = roundPoint(point);
-    if (pointsEqual(edge[0], node) || pointsEqual(edge[1], node)) {
-      return;
-    }
-
-    const segment = toFlattenSegment(edge);
-    const attrs = this.copyEdgeAttributes(edge[0], edge[1]);
-    const originalId = attrs.id;
-    delete attrs.id;
-
-    this.removeSegment(segment);
-
-    const firstEdge: NxEdge = [roundPoint(edge[0]), node];
-    const secondEdge: NxEdge = [node, roundPoint(edge[1])];
-    const firstEdgeId = orderedNodePairKey(this.nodeKey(firstEdge[0]), this.nodeKey(firstEdge[1]));
-    const secondEdgeId = orderedNodePairKey(
-      this.nodeKey(secondEdge[0]),
-      this.nodeKey(secondEdge[1]),
+  /** Longest edge in a snapshot path; null for no edges. */
+  getLongestEdge(path: SpatialPath<N, E>): SpatialEdge<N, E> | null {
+    return path.edges.reduce<SpatialEdge<N, E> | null>(
+      (winner, edge) => (!winner || edge.length > winner.length ? edge : winner),
+      null,
     );
-
-    this.addEdgeWithAttrs(firstEdge[0], firstEdge[1], {
-      ...attrs,
-      ...(originalId ? { id: firstEdgeId } : {}),
-    });
-    this.addEdgeWithAttrs(secondEdge[0], secondEdge[1], {
-      ...attrs,
-      ...(originalId ? { id: secondEdgeId } : {}),
-    });
   }
 
   /**
-   * Merge another graph into this one (mutates this graph). Existing nodes and
-   * edges keep their attributes; only missing ones are copied from `other`.
+   * Whether any incident directions are orthogonal within tolerance; false when missing.
+   * @throws For invalid tolerance.
    */
-  union(other: SpatialGraph): void {
-    // Add all nodes from other graph
-    other.forEachNode((node, attrs) => {
-      if (!this.hasNode(node)) {
-        this.addNode(node, attrs);
+  hasOrthogonalEdges(node: NodeInput<N>, tolerance = 1e-7): boolean {
+    validateAngle(tolerance);
+    const current = this.getNode(node);
+
+    if (!current) {
+      return false;
+    }
+
+    const neighbors = this.getNeighbors(current);
+    return neighbors.some((a, i) =>
+      neighbors
+        .slice(i + 1)
+        .some(
+          (b) =>
+            Math.abs(
+              angleDegrees(vector(current.point, a.point), vector(current.point, b.point)) - 90,
+            ) <= tolerance,
+        ),
+    );
+  }
+
+  /** Current nodes with orthogonal incident directions. */
+  getNodesWithOrthogonalEdges(tolerance = 1e-7): SpatialNode<N>[] {
+    validateAngle(tolerance);
+    return this.getNodes().filter((node) => this.hasOrthogonalEdges(node, tolerance));
+  }
+
+  /**
+   * Neighbors ordered by counterclockwise turn from a direction vector; [] when missing.
+   * @throws For invalid/zero direction.
+   */
+  getNeighborsByLeftTurn(node: NodeInput<N>, incoming: Vector2D): SpatialNode<N>[] {
+    canonicalPoint(incoming, null);
+    if (Math.hypot(...incoming) === 0) {
+      throw new Error('Incoming direction must be nonzero; pass a direction vector.');
+    }
+
+    const center = this.getNode(node);
+
+    if (!center) {
+      return [];
+    }
+
+    const heading = Math.atan2(incoming[1], incoming[0]);
+
+    const turn = (neighbor: SpatialNode<N>) => {
+      const v = vector(center.point, neighbor.point);
+      return (Math.atan2(v[1], v[0]) - heading + 2 * Math.PI) % (2 * Math.PI);
+    };
+
+    return this.getNeighbors(center).sort((a, b) => turn(a) - turn(b));
+  }
+
+  /**
+   * Nonmutating geometric route between nearest projections; null if empty, disconnected, or beyond
+   * maxSnapDistance. Searches a temporary Graphology copy with exact projection nodes.
+   * @throws For invalid coordinates/options.
+   */
+  route(
+    fromPoint: Point2D,
+    toPoint: Point2D,
+    options: {
+      maxSnapDistance?: number;
+    } = {},
+  ): RouteResult<N, E> | null {
+    return this.guarded(() => {
+      const maximum = options.maxSnapDistance ?? Infinity;
+
+      if (Number.isNaN(maximum) || maximum < 0) {
+        throw new RangeError('maxSnapDistance must be nonnegative.');
       }
-    });
 
-    // Add all edges from other graph
-    other.forEachEdge((edge, attrs, source, target) => {
-      if (!this.hasEdge(source, target)) {
-        this.addEdge(source, target, attrs);
+      const from = this.findNearestEdge(fromPoint);
+      const to = this.findNearestEdge(toPoint);
+
+      if (!from || !to || from.distance > maximum || to.distance > maximum) {
+        return null;
       }
+
+      const query = this.#graph.copy();
+      const costs = new Map(query.edges().map((key) => [key, distance(...this.segment(key))]));
+      const virtualEdgeAttributes = query.getEdgeAttributes(from.edge.key);
+
+      const link = (a: string, b: string, cost: number): void => {
+        const existing = query.edge(a, b);
+        const key = existing ?? query.addUndirectedEdge(a, b, virtualEdgeAttributes);
+        costs.set(key, Math.min(cost, costs.get(key) ?? Infinity));
+      };
+
+      const attach = (projection: NearestEdgeResult<N, E>, virtual: string): string => {
+        const edge = projection.edge;
+
+        if (projection.t === 0) {
+          return edge.source.key;
+        }
+        if (projection.t === 1) {
+          return edge.target.key;
+        }
+
+        const source = query.getNodeAttributes(edge.source.key);
+        query.addNode(virtual, { ...source, x: projection.point[0], y: projection.point[1] });
+        link(virtual, edge.source.key, projection.t * edge.length);
+        link(virtual, edge.target.key, (1 - projection.t) * edge.length);
+        return virtual;
+      };
+
+      const start = attach(from, VIRTUAL_SOURCE_KEY);
+      const goal = attach(to, VIRTUAL_TARGET_KEY);
+
+      if (from.edge.equals(to.edge) && start !== goal) {
+        link(start, goal, distance(from.point, to.point));
+      }
+
+      const result = shortestPath(query, start, goal, costs);
+
+      if (!result) {
+        return null;
+      }
+
+      return {
+        from,
+        to,
+        points: Object.freeze(
+          result.nodes.map((key) => freezePoint(pointOf(query.getNodeAttributes(key)))),
+        ),
+        length: result.cost,
+        cost: result.cost,
+      };
     });
   }
 
-  // ─── Element labels ─────────────────────────────────────────────────────────
+  /**
+   * Split crossings/T-junctions and overlaps atomically. Unrepresentable grid intersections return
+   * unresolved points without mutation.
+   * Candidate bounds include positionTolerance; geometry is checked before planning cuts.
+   */
+  planarize(options: ConflictOptions<N, E> = {}): PlanarizeResult {
+    return this.guarded(() => {
+      const keys = this.#graph.edges();
+      const cuts = new Map(keys.map((key) => [key, [...this.segment(key)] as Point2D[]]));
+      const unresolved: Point2D[] = [];
+      const seen = new Set<string>();
+      const intersectionPoints = new Set<string>();
+      let overlaps = 0;
+
+      for (const first of keys) {
+        for (const second of this.#edgeIndex.search(
+          bounds(this.segment(first), this.positionTolerance),
+        )) {
+          if (first === second) {
+            continue;
+          }
+
+          const pair = pairKey(first, second);
+
+          if (seen.has(pair)) {
+            continue;
+          }
+          seen.add(pair);
+          const result = intersectSegments(
+            this.segment(first),
+            this.segment(second),
+            this.positionTolerance,
+          );
+          if (result.type === 'none') {
+            continue;
+          }
+          if (result.type === 'overlap') {
+            overlaps++;
+          }
+          for (const point of result.type === 'point' ? [result.point] : result.endpoints) {
+            const canonical = this.canonical(point);
+
+            if (
+              [first, second].some(
+                (key) =>
+                  projectPoint(canonical, this.segment(key)).distance > this.positionTolerance,
+              )
+            ) {
+              unresolved.push(freezePoint(point));
+              continue;
+            }
+            intersectionPoints.add(pointKey(canonical));
+            cuts.get(first)!.push(canonical);
+            cuts.get(second)!.push(canonical);
+          }
+        }
+      }
+      if (unresolved.length) {
+        return { changed: false, intersections: intersectionPoints.size, overlaps, unresolved };
+      }
+      for (const key of keys) {
+        const unique = new Map(cuts.get(key)!.map((point) => [pointKey(point), point]));
+        cuts.set(
+          key,
+          [...unique.values()].sort(
+            (a, b) => projectPoint(a, this.segment(key)).t - projectPoint(b, this.segment(key)).t,
+          ),
+        );
+      }
+      if (![...cuts.values()].some((points) => points.length > 2) && !overlaps) {
+        return {
+          changed: false,
+          intersections: intersectionPoints.size,
+          overlaps: 0,
+          unresolved: [],
+        };
+      }
+
+      const plan = emptyPlan<N, E>();
+      plan.removeEdges = keys;
+      const pieces = new Map<
+        string,
+        {
+          key?: string;
+          source: string;
+          target: string;
+          data: E;
+        }
+      >();
+      for (const key of keys.sort((a, b) =>
+        compareKeys(pairKey(...this.#graph.extremities(a)), pairKey(...this.#graph.extremities(b))),
+      )) {
+        const points = cuts.get(key)!;
+
+        for (const point of points) {
+          const node = pointKey(point);
+
+          if (!this.#graph.hasNode(node) && !plan.nodes.has(node)) {
+            plan.nodes.set(node, { x: point[0], y: point[1], data: this.newNodeData() });
+          }
+        }
+        for (let i = 1; i < points.length; i++) {
+          const source = pointKey(points[i - 1]!);
+          const target = pointKey(points[i]!);
+
+          if (source === target) {
+            continue;
+          }
+          validateSegment([points[i - 1]!, points[i]!]);
+          const pair = pairKey(source, target);
+          const winner = pieces.get(pair);
+          const data = this.cloneEdge(this.#graph.getEdgeAttributes(key).data);
+          pieces.set(
+            pair,
+            winner
+              ? { ...winner, data: mergeData(winner.data, data, options.mergeEdgeAttributes) }
+              : { key: points.length === 2 ? key : undefined, source, target, data },
+          );
+        }
+      }
+      plan.edges = [...pieces.values()];
+      this.apply(plan);
+      return { changed: true, intersections: intersectionPoints.size, overlaps, unresolved: [] };
+    });
+  }
 
   /**
-   * The `label` attribute of a node, when it carries one.
-   *
-   * Labels are stored in the ordinary `label` attribute, so they survive
-   * `moveNode`, the collapse merges and graphology's `export()`/`import()`.
+   * Merge transitive within-tolerance clusters into the smallest canonical key; displacement may
+   * exceed tolerance.
    */
-  getNodeLabel(point: NxPoint): string | null {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key)) return null;
+  mergeNearbyNodes(tolerance: number, options: ConflictOptions<N, E> = {}): NearbyMergeResult {
+    return this.guarded(() => {
+      validateTolerance(tolerance);
+      const keys = this.#graph.nodes();
+      const parent = new Map(keys.map((key) => [key, key]));
 
-    const label = this.getNodeAttribute(key, 'label');
-    return typeof label === 'string' ? label : null;
-  }
+      const root = (key: string): string => {
+        let cursor = key;
 
-  /** Set (or, with `null`, clear) a node's label. Does nothing when the node does not exist. */
-  setNodeLabel(point: NxPoint, label: string | null): void {
-    const key = this.nodeKey(point);
-    if (!this.hasNode(key)) return;
+        while (parent.get(cursor) !== cursor) {
+          cursor = parent.get(cursor)!;
+        }
 
-    if (label === null) this.removeNodeAttribute(key, 'label');
-    else this.setNodeAttribute(key, 'label', label);
-  }
+        return cursor;
+      };
 
-  /** The `label` attribute of an edge, when it carries one. */
-  getEdgeLabel(edge: NxEdge): string | null {
-    const key = this.findEdgeKey(edge[0], edge[1]);
-    if (!key) return null;
+      for (const key of keys) {
+        const p = pointOf(this.#graph.getNodeAttributes(key));
 
-    const label = this.getEdgeAttribute(key, 'label');
-    return typeof label === 'string' ? label : null;
-  }
-
-  /** Set (or, with `null`, clear) an edge's label. Does nothing when the edge does not exist. */
-  setEdgeLabel(edge: NxEdge, label: string | null): void {
-    const key = this.findEdgeKey(edge[0], edge[1]);
-    if (!key) return;
-
-    if (label === null) this.removeEdgeAttribute(key, 'label');
-    else this.setEdgeAttribute(key, 'label', label);
-  }
-
-  // ─── Traversal ──────────────────────────────────────────────────────────────
-
-  /**
-   * Split the graph into connected components, each listed as its own nodes.
-   * Plain BFS, so no extra dependency is needed.
-   */
-  getConnectedComponents(): NxPoint[][] {
-    const seen = new Set<string>();
-    const components: NxPoint[][] = [];
-
-    for (const start of this.getNodes()) {
-      if (seen.has(this.nodeKey(start))) continue;
-
-      const component: NxPoint[] = [];
-      const queue: NxPoint[] = [start];
-      seen.add(this.nodeKey(start));
-
-      while (queue.length > 0) {
-        const node = queue.shift()!;
-        component.push(node);
-
-        for (const neighbor of this.getPointNeighbors(node)) {
-          const key = this.nodeKey(neighbor);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          queue.push(neighbor);
+        for (const other of this.#nodeIndex.search({
+          minX: p[0] - tolerance,
+          minY: p[1] - tolerance,
+          maxX: p[0] + tolerance,
+          maxY: p[1] + tolerance,
+        })) {
+          if (distance(p, pointOf(this.#graph.getNodeAttributes(other))) <= tolerance) {
+            const a = root(key);
+            const b = root(other);
+            parent.set(a < b ? b : a, a < b ? a : b);
+          }
         }
       }
 
-      components.push(component);
-    }
+      const groups = new Map<string, string[]>();
 
-    return components;
-  }
+      for (const key of keys) {
+        const representative = root(key);
+        const group = groups.get(representative) ?? [];
+        group.push(key);
+        groups.set(representative, group);
+      }
 
-  /**
-   * Neighbours of `node`, ordered by how far LEFT the turn onto each one is for
-   * a walk arriving along `incoming` (the direction of travel into the node).
-   *
-   * Measuring `(back - out) mod 2π` and sorting ascending puts the sharpest left
-   * turn first: left = π/2, straight ahead = π, right = 3π/2. That ordering is
-   * what makes a depth-first walk trace faces counter-clockwise.
-   */
-  getNeighborsByLeftTurn(node: NxPoint, incoming: NxPoint): NxPoint[] {
-    const back = Math.atan2(-incoming[1], -incoming[0]);
+      const clusters = [...groups.values()]
+        .filter((group) => group.length > 1)
+        .map((group) => group.sort());
+      const moves = new Map<string, Point2D>();
+      let maxDisplacement = 0;
 
-    return this.getPointNeighbors(node)
-      .map((neighbor) => ({
-        neighbor,
-        key: this.nodeKey(neighbor),
-        turn: normalizeAngle(back - Math.atan2(neighbor[1] - node[1], neighbor[0] - node[0])),
-      }))
-      .sort((a, b) => a.turn - b.turn || a.key.localeCompare(b.key))
-      .map((entry) => entry.neighbor);
-  }
+      for (const group of clusters) {
+        const point = pointOf(this.#graph.getNodeAttributes(group[0]!));
 
-  /**
-   * Create a graph from a set of nodes, connecting every pair for which
-   * `isValidCb(a, b)` returns true (for example, pairs with a clear line of
-   * sight). Quadratic in the number of nodes.
-   */
-  static createCompleteGraph(nodes: NxPoint[], isValidCb: IsValidCallback): SpatialGraph {
-    const graph = new SpatialGraph();
-
-    // Add all nodes
-    nodes.forEach((node) => graph.addVertex(node));
-
-    // Add edges between all pairs of nodes that pass validation
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const node1 = nodes[i];
-        const node2 = nodes[j];
-        if (!node1 || !node2) continue;
-
-        if (isValidCb(node1, node2)) {
-          graph.addEdgeWithAttrs(node1, node2);
+        for (const key of group.slice(1)) {
+          moves.set(key, point);
+          maxDisplacement = Math.max(
+            maxDisplacement,
+            distance(point, pointOf(this.#graph.getNodeAttributes(key))),
+          );
         }
       }
-    }
 
+      const { plan, report } = planMoves(this.#graph, moves, options);
+      this.apply(plan);
+      return { ...report, clusters, maxDisplacement };
+    });
+  }
+
+  /** Copied graph metadata; nested values follow the shallow-copy convention. */
+  getGraphAttributes(): Readonly<Record<string, unknown>> {
+    return Object.freeze(copyData(this.#graph.getAttributes()));
+  }
+
+  /** A graph metadata value; undefined when absent. */
+  getGraphAttribute(name: string): unknown {
+    return this.#graph.getAttribute(name);
+  }
+
+  /** Set graph metadata, preserving spatial storage invariants. */
+  setGraphAttribute(name: string, value: unknown): void {
+    this.guarded(() => {
+      this.#graph.replaceAttributes({ ...this.#graph.getAttributes(), [name]: value });
+      this.currentRevision++;
+    });
+  }
+
+  /** Replace graph metadata with a copied dictionary. */
+  replaceGraphAttributes(attributes: Record<string, unknown>): void {
+    this.guarded(() => {
+      this.#graph.replaceAttributes(copyData(attributes));
+      this.currentRevision++;
+    });
+  }
+
+  /** String label, or null for a missing/unlabeled node. */
+  getNodeLabel(node: NodeInput<N>): string | null {
+    const label = (this.getNodeAttributes(node) as Record<string, unknown> | null)?.label;
+    return typeof label === 'string' ? label : null;
+  }
+
+  /** Set/remove a label on an existing node; false when absent. */
+  setNodeLabel(node: NodeInput<N>, label: LabelInput<N>): boolean {
+    return this.guarded(() => {
+      const key = this.keyOf(node);
+
+      if (!this.#graph.hasNode(key)) {
+        return false;
+      }
+      if (label !== null && typeof label !== 'string') {
+        throw new TypeError('Label must be a string or null to remove it.');
+      }
+
+      const record = this.#graph.getNodeAttributes(key);
+      const data = this.cloneNode(record.data) as N & {
+        label?: string;
+      };
+      if (label === null) {
+        delete data.label;
+      } else {
+        data.label = label;
+      }
+      this.#graph.replaceNodeAttributes(key, { ...record, data });
+      this.currentRevision++;
+      return true;
+    });
+  }
+
+  /** String label, or null for a missing/unlabeled edge. */
+  getEdgeLabel(edge: EdgeInput<N, E>): string | null {
+    const label = (this.getEdgeAttributes(edge) as Record<string, unknown> | null)?.label;
+    return typeof label === 'string' ? label : null;
+  }
+
+  /** Set/remove an existing edge's label; false when absent. */
+  setEdgeLabel(edge: EdgeInput<N, E>, label: LabelInput<E>): boolean {
+    return this.guarded(() => {
+      const key = this.edgeKey(edge);
+
+      if (key === undefined) {
+        return false;
+      }
+      if (label !== null && typeof label !== 'string') {
+        throw new TypeError('Label must be a string or null to remove it.');
+      }
+
+      const data = this.cloneEdge(this.#graph.getEdgeAttributes(key).data) as E & {
+        label?: string;
+      };
+      if (label === null) {
+        delete data.label;
+      } else {
+        data.label = label;
+      }
+      this.#graph.replaceEdgeAttributes(key, { data });
+      this.currentRevision++;
+      return true;
+    });
+  }
+
+  private emptyGraph(): SpatialGraph<N, E> {
+    return new SpatialGraph<N, E>(...([this.config] as ConstructorArgs<N, E>));
+  }
+
+  private cloneGraph(mode: 'all' | 'nodes' | 'none'): SpatialGraph<N, E> {
+    const graph = this.emptyGraph();
+    const plan = emptyPlan<N, E>();
+    graph.#graph.replaceAttributes(copyData(this.#graph.getAttributes()));
+    if (mode !== 'none') {
+      for (const key of this.#graph.nodes()) {
+        const record = this.#graph.getNodeAttributes(key);
+        plan.nodes.set(key, { ...record, data: this.cloneNode(record.data) });
+      }
+    }
+    if (mode === 'all') {
+      for (const key of this.#graph.edges()) {
+        const [source, target] = this.#graph.extremities(key);
+        plan.edges.push({
+          key,
+          source,
+          target,
+          data: this.cloneEdge(this.#graph.getEdgeAttributes(key).data),
+        });
+      }
+    }
+    graph.apply(plan);
     return graph;
   }
-}
 
-const NO_EDGES_MESSAGE =
-  'Graph has no edges. Add segments with addSegment(s) first, or check graph.size > 0.';
-const NO_NODES_MESSAGE =
-  'Graph has no nodes. Add nodes with addVertex() or addSegment(s) first, or check graph.order > 0.';
+  /** Independent graph with the same options/metadata but no nodes or edges. */
+  nullCopy(): SpatialGraph<N, E> {
+    return this.guarded(() => this.cloneGraph('none'));
+  }
 
-function orderedNodePairKey(first: string, second: string): string {
-  return first < second ? `${first}|${second}` : `${second}|${first}`;
-}
+  /** Independent graph containing the nodes/options/metadata, without edges. */
+  emptyCopy(): SpatialGraph<N, E> {
+    return this.guarded(() => this.cloneGraph('nodes'));
+  }
 
-/** Fold an angle into [0, 2π) so turn comparisons never straddle the ±π seam. */
-function normalizeAngle(angle: number): number {
-  const twoPi = Math.PI * 2;
-  return ((angle % twoPi) + twoPi) % twoPi;
+  /**
+   * Independent graph preserving keys, options and metadata (shallow unless clone hooks are
+   * configured).
+   */
+  copy(): SpatialGraph<N, E> {
+    return this.guarded(() => this.cloneGraph('all'));
+  }
+
+  /** Edge-filtered subgraph preserving metadata/policy; optionally retain isolated nodes. */
+  getSubgraph(
+    predicate: (edge: SpatialEdge<N, E>) => boolean,
+    options: {
+      includeIsolated?: boolean;
+    } = {},
+  ): SpatialGraph<N, E> {
+    return this.guarded(() => {
+      const graph = this.cloneGraph('none');
+      const plan = emptyPlan<N, E>();
+
+      for (const key of this.#graph.edges()) {
+        if (predicate(this.edgeSnapshot(key))) {
+          const [source, target] = this.#graph.extremities(key);
+
+          for (const node of [source, target]) {
+            const record = this.#graph.getNodeAttributes(node);
+            plan.nodes.set(node, { ...record, data: this.cloneNode(record.data) });
+          }
+          plan.edges.push({
+            key,
+            source,
+            target,
+            data: this.cloneEdge(this.#graph.getEdgeAttributes(key).data),
+          });
+        }
+      }
+      if (options.includeIsolated) {
+        for (const key of this.#graph.nodes()) {
+          if (this.#graph.degree(key) === 0) {
+            const record = this.#graph.getNodeAttributes(key);
+            plan.nodes.set(key, { ...record, data: this.cloneNode(record.data) });
+          }
+        }
+      }
+      graph.apply(plan);
+      return graph;
+    });
+  }
+
+  /**
+   * Merge another graph; existing metadata wins.
+   * @throws For differing policies unless renormalize is explicit.
+   */
+  union(
+    other: SpatialGraph<N, E>,
+    options: ConflictOptions<N, E> & {
+      renormalize?: boolean;
+    } = {},
+  ): MutationReport {
+    return this.guarded(() => this.mergeGraph(other, options));
+  }
+
+  private mergeGraph(
+    other: SpatialGraph<N, E>,
+    options: ConflictOptions<N, E> & {
+      renormalize?: boolean;
+    },
+  ): MutationReport {
+    if (
+      !options.renormalize &&
+      (other.coordinatePrecision !== this.coordinatePrecision ||
+        other.positionTolerance !== this.positionTolerance ||
+        other.straightAngleToleranceDeg !== this.straightAngleToleranceDeg)
+    ) {
+      throw new Error(
+        'Graph policies differ; use matching options or union(other, {renormalize: true}).',
+      );
+    }
+
+    const plan = emptyPlan<N, E>();
+    const report: MutationReport = {
+      changed: false,
+      moved: [],
+      mergedNodes: 0,
+      collapsedEdges: 0,
+      mergedEdges: 0,
+    };
+    for (const node of other.getNodes().sort((a, b) => compareKeys(a.key, b.key))) {
+      const point = this.canonical(node.point);
+      const key = pointKey(point);
+      const incoming = this.cloneNode(node.attributes as N);
+      const winner =
+        plan.nodes.get(key) ??
+        (this.#graph.hasNode(key) ? this.#graph.getNodeAttributes(key) : undefined);
+      plan.nodes.set(key, {
+        x: point[0],
+        y: point[1],
+        data: winner ? mergeData(winner.data, incoming, options.mergeNodeAttributes) : incoming,
+      });
+      if (winner) {
+        report.mergedNodes++;
+      }
+    }
+
+    const edges = new Map<
+      string,
+      {
+        key?: string;
+        source: string;
+        target: string;
+        data: E;
+      }
+    >();
+    for (const edge of other
+      .getEdges()
+      .sort((a, b) =>
+        compareKeys(pairKey(a.source.key, a.target.key), pairKey(b.source.key, b.target.key)),
+      )) {
+      const [source, target] = edge.endpoints.map((point) => this.getNodeKey(point)) as [
+        string,
+        string,
+      ];
+      if (source === target) {
+        report.collapsedEdges++;
+        continue;
+      }
+      validateSegment([pointOf(plan.nodes.get(source)!), pointOf(plan.nodes.get(target)!)]);
+      const pair = pairKey(source, target);
+      const incoming = this.cloneEdge(edge.attributes as E);
+      const existing =
+        this.#graph.hasNode(source) && this.#graph.hasNode(target)
+          ? this.#graph.edge(source, target)
+          : undefined;
+      const winner =
+        edges.get(pair) ??
+        (existing === undefined
+          ? undefined
+          : { key: existing, source, target, data: this.#graph.getEdgeAttributes(existing).data });
+      edges.set(
+        pair,
+        winner
+          ? { ...winner, data: mergeData(winner.data, incoming, options.mergeEdgeAttributes) }
+          : { source, target, data: incoming },
+      );
+      if (winner) {
+        report.mergedEdges++;
+      }
+    }
+
+    const currentAttributes = this.#graph.getAttributes();
+    const attributes = {
+      ...copyData(other.#graph.getAttributes()),
+      ...copyData(currentAttributes),
+    };
+    const metadataChanged = Object.keys(attributes).some(
+      (key) => !Object.hasOwn(currentAttributes, key),
+    );
+    plan.edges = [...edges.values()];
+    this.apply(plan);
+    this.#graph.replaceAttributes(attributes);
+    report.changed = plan.nodes.size > 0 || plan.edges.length > 0 || metadataChanged;
+    if (metadataChanged && !plan.nodes.size && !plan.edges.length) {
+      this.currentRevision++;
+    }
+
+    return report;
+  }
+
+  /** Versioned spatial envelope. Metadata must be JSON-compatible for lossless JSON.stringify. */
+  export(): SpatialGraphJSON<N, E> {
+    return {
+      schema: 'spatial-graph',
+      version: 2,
+      options: {
+        coordinatePrecision: this.coordinatePrecision,
+        positionTolerance: this.positionTolerance,
+        straightAngleToleranceDeg: this.straightAngleToleranceDeg,
+      },
+      attributes: copyData(this.#graph.getAttributes()),
+      nodes: this.#graph.nodes().map((key) => ({
+        key,
+        point: freezePoint(pointOf(this.#graph.getNodeAttributes(key))),
+        attributes: this.cloneNode(this.#graph.getNodeAttributes(key).data),
+      })),
+      edges: this.#graph.edges().map((key) => ({
+        key,
+        source: this.#graph.source(key),
+        target: this.#graph.target(key),
+        attributes: this.cloneEdge(this.#graph.getEdgeAttributes(key).data),
+      })),
+    };
+  }
+
+  /**
+   * Replace or merge a fully validated spatial envelope.
+   * @throws Before mutation for invalid data/policy.
+   */
+  import(
+    data: unknown,
+    options: {
+      merge?: boolean;
+    } = {},
+  ): void {
+    this.guarded(() => {
+      const decoded = decodeGraphJSON<N, E>(data);
+
+      if (
+        decoded.options.coordinatePrecision !== this.coordinatePrecision ||
+        decoded.options.positionTolerance !== this.positionTolerance ||
+        decoded.options.straightAngleToleranceDeg !== this.straightAngleToleranceDeg
+      ) {
+        throw new Error(
+          'Serialized policy differs; use SpatialGraph.fromJSON to restore its policy.',
+        );
+      }
+
+      const incoming = this.emptyGraph();
+      incoming.load(decoded);
+      if (options.merge) {
+        this.mergeGraph(incoming, {});
+        return;
+      }
+      this.#graph = incoming.#graph;
+      this.#nodeIndex = incoming.#nodeIndex;
+      this.#edgeIndex = incoming.#edgeIndex;
+      this.currentRevision++;
+    });
+  }
+
+  private load(data: SpatialGraphJSON<N, E>): void {
+    const plan = emptyPlan<N, E>();
+
+    for (const node of data.nodes) {
+      plan.nodes.set(node.key, {
+        x: node.point[0],
+        y: node.point[1],
+        data: this.cloneNode(node.attributes),
+      });
+    }
+    for (const edge of data.edges) {
+      plan.edges.push({
+        key: edge.key,
+        source: edge.source,
+        target: edge.target,
+        data: this.cloneEdge(edge.attributes),
+      });
+    }
+    this.apply(plan);
+    this.#graph.replaceAttributes(copyData(data.attributes));
+  }
+
+  /**
+   * Restore a validated detached graph with its serialized coordinate policy.
+   * Metadata types default to NodeAttributes/EdgeAttributes; specify custom types explicitly.
+   */
+  static fromJSON<N extends object = NodeAttributes, E extends object = EdgeAttributes>(
+    data: unknown,
+    ...args: ConstructorArgs<NoInfer<N>, NoInfer<E>>
+  ): SpatialGraph<N, E> {
+    const decoded = decodeGraphJSON<N, E>(data);
+    const graph = new SpatialGraph<N, E>(
+      ...([{ ...args[0], ...decoded.options }] as ConstructorArgs<N, E>),
+    );
+    graph.load(decoded);
+    return graph;
+  }
+
+  /**
+   * Import a legacy coordinate-keyed Graphology export with explicit precision; preserves user
+   * weight as data.
+   */
+  static fromLegacyJSON(
+    data: unknown,
+    options: {
+      coordinatePrecision: number | null;
+      positionTolerance?: number;
+    },
+  ) {
+    const decoded = decodeLegacyJSON(data, options);
+    return { graph: SpatialGraph.fromJSON(decoded.data), report: decoded.report };
+  }
+
+  /** Detached Graphology graph with top-level geometry and nested data. */
+  toGraphology(): AbstractGraph<
+    {
+      x: number;
+      y: number;
+      data: N;
+    },
+    {
+      length: number;
+      data: E;
+    }
+  > {
+    return detachedGraphology(this.#graph, this.cloneNode, this.cloneEdge);
+  }
+
+  /**
+   * Validate/import a detached Graphology adapter. Directed, multi, loops, and inconsistent
+   * geometry throw.
+   * Metadata types default to NodeAttributes/EdgeAttributes; specify custom types explicitly.
+   */
+  static fromGraphology<N extends object = NodeAttributes, E extends object = EdgeAttributes>(
+    graph: AbstractGraph,
+    ...args: GraphologyImportArgs<NoInfer<N>, NoInfer<E>>
+  ): SpatialGraph<N, E> {
+    const config = args[0] ?? {};
+    return SpatialGraph.fromJSON<N, E>(
+      decodeGraphology<N, E>(graph, config),
+      ...(args as ConstructorArgs<N, E>),
+    );
+  }
+
+  /** Independent Flatten points; empty for no nodes. */
+  getFlattenPoints(): Point[] {
+    return this.getNodePoints().map((point) => new Point(...point));
+  }
+
+  /** Independent Flatten segments; empty for no edges. */
+  getFlattenSegments(): Segment[] {
+    return this.getEdgeSegments().map(([a, b]) => new Segment(new Point(...a), new Point(...b)));
+  }
+
+  /** Explicit Flatten segment insertion. @throws For arcs/unsupported shapes before mutation. */
+  addFlattenSegment(shape: Segment, ...args: AttributeArgs<E>): EdgeInsertResult<N, E> {
+    return this.addEdges(flattenSegments([{ shape, attributes: (args[0] ?? {}) as E }]))
+      .results[0]!;
+  }
+
+  /** Explicit Flatten batch adapter; rejects unsupported shapes atomically. */
+  addFlattenSegments(
+    records: readonly {
+      shape: unknown;
+      attributes: E;
+    }[],
+  ): BatchInsertResult<N, E> {
+    return this.addEdges(flattenSegments(records));
+  }
+
+  /** Explicit Flatten removal; false when absent. */
+  removeFlattenSegment(segment: Segment): boolean {
+    return this.removeEdge(flattenSegments([{ shape: segment, attributes: {} }])[0]!.endpoints);
+  }
+
+  /**
+   * Per-edge LineStrings and isolated Points with user metadata. Cartesian length remains planar.
+   */
+  toGeoJSON(): GeoJSONCollection {
+    return encodeGeoJSON(this.export());
+  }
+
+  /**
+   * Import Point/LineString/MultiLineString features; unsupported/extra-dimensional geometry throws
+   * atomically.
+   */
+  static fromGeoJSON(
+    data: unknown,
+    options: {
+      coordinatePrecision?: number | null;
+      dropExtraDimensions?: boolean;
+      onReport?: (report: BatchInsertResult) => void;
+    } = {},
+  ): SpatialGraph {
+    const decoded = decodeGeoJSON(data, options);
+    const graph = new SpatialGraph({ coordinatePrecision: options.coordinatePrecision });
+    const report = graph.addEdges(decoded.edges);
+
+    for (const node of decoded.nodes) {
+      graph.addNode(node.point, node.attributes);
+    }
+    options.onReport?.(report);
+    return graph;
+  }
+
+  /** Build a proximity/visibility graph using a caller's rule on canonical coordinates. */
+  static fromPoints(
+    points: readonly Point2D[],
+    options: {
+      connect: (a: Point2D, b: Point2D) => boolean;
+      coordinatePrecision?: number | null;
+      edgeAttributes?: (a: Point2D, b: Point2D) => EdgeAttributes;
+    },
+  ): SpatialGraph {
+    const graph = new SpatialGraph({ coordinatePrecision: options.coordinatePrecision });
+
+    for (const point of points) {
+      graph.addNode(point);
+    }
+
+    const canonical = graph.getNodePoints();
+    const records: EdgeRecord[] = [];
+
+    for (let i = 0; i < canonical.length; i++) {
+      for (let j = i + 1; j < canonical.length; j++) {
+        const a = canonical[i]!;
+        const b = canonical[j]!;
+
+        if (options.connect(a, b)) {
+          records.push({ endpoints: [a, b], attributes: options.edgeAttributes?.(a, b) ?? {} });
+        }
+      }
+    }
+    graph.addEdges(records);
+    return graph;
+  }
 }

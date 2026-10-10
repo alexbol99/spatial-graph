@@ -1,27 +1,33 @@
-// Build a graph from points using your own rule for which pairs are connected.
-// Here: any two points closer than 8 units. The rule can be anything, such as a
-// line-of-sight test or a compatibility check.
 import assert from 'node:assert/strict';
 import { SpatialGraph } from '@flatten-js/spatial-graph';
-import type { NxPoint } from '@flatten-js/spatial-graph';
 
-const points: NxPoint[] = [
-  [0, 0],
-  [5, 0],
-  [5, 5],
-  [20, 20], // too far from the others
-];
-const maxDistance = 8;
-
-const graph = SpatialGraph.createCompleteGraph(
-  points,
-  (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= maxDistance,
+// fromPoints tests every pair of canonical positions with YOUR connection rule.
+// This O(n²) construction suits small point sets; it is not an indexed radius query.
+const graph = SpatialGraph.fromPoints(
+  [
+    [0, 0],
+    [5, 0],
+    [5, 5],
+    [20, 20],
+  ],
+  {
+    connect: (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 8,
+    edgeAttributes: () => ({ label: 'nearby' }),
+  },
 );
+assert.equal(graph.nodeCount, 4);
+assert.equal(graph.edgeCount, 3);
+assert.equal(graph.getConnectedComponents().length, 2);
+assert.equal(graph.getNodeType([20, 20]), 'isolated');
 
-const groups = graph.getConnectedComponents();
-console.log(`${graph.size} edges, ${groups.length} groups`);
-
-assert.equal(graph.order, 4); // isolated points stay in the graph as nodes
-assert.equal(graph.size, 3);
-assert.equal(groups.length, 2);
-assert.deepEqual(graph.getPointNeighbors([20, 20]), []);
+// Connecting pairs and merging near nodes are different operations. Merging
+// uses transitive clusters: endpoints of a chain can be farther than tolerance.
+const clustered = new SpatialGraph();
+clustered.addNode([0, 0]);
+clustered.addNode([0.75, 0]);
+clustered.addNode([1.5, 0]);
+const report = clustered.mergeNearbyNodes(1);
+assert.equal(report.clusters.length, 1);
+assert.equal(report.mergedNodes, 2);
+assert.equal(report.maxDisplacement, 1.5);
+assert.deepEqual(clustered.getNodePoints(), [[0, 0]]);

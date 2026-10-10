@@ -1,0 +1,102 @@
+{
+  "options": {
+    "type": "undirected",
+    "multi": false,
+    "allowSelfLoops": false
+  },
+  "attributes": {},
+  "nodes": [],
+  "edges": [
+    {
+      "key": "e0",
+      "source": "a",
+      "target": "b",
+      "attributes": {
+        "coords": [
+          [
+            0.4,
+            0.4
+          ],
+          [
+            300.6,
+            0.2
+          ]
+        ],
+        "length": 300.2,
+        "branch_id": 0,
+        "segment_index": 0,
+        "kind": "STRAIGHT",
+        "is_connector": false,
+        "corridor_width": 140
+      }
+    },
+    {
+      "key": "e1",
+      "source": "b",
+      "target": "c",
+      "attributes": {
+        "coords": [
+          [
+            300.4,
+            0.3
+          ],
+          [
+            300.5,
+            250.5
+          ]
+        ],
+        "length": 250.2,
+        "branch_id": 0,
+        "segment_index": 1,
+        "kind": "STRAIGHT",
+        "is_connector": false,
+        "corridor_width": 140
+      }
+    },
+    {
+      "key": "e2",
+      "source": "b",
+      "target": "d",
+      "attributes": {
+        "coords": [
+          [
+            300.6,
+            0.2
+          ],
+          [
+            600.2,
+            0.1
+          ]
+        ],
+        "length": 299.6,
+        "branch_id": 1,
+        "segment_index": 0,
+        "kind": "STRAIGHT",
+        "is_connector": true
+      }
+    },
+    {
+      "key": "e3",
+      "source": "d",
+      "target": "d2",
+      "attributes": {
+        "coords": [
+          [
+            600.2,
+            0.1
+          ],
+          [
+            600.4,
+            0.4
+          ]
+        ],
+        "length": 0.3,
+        "branch_id": 1,
+        "segment_index": 1,
+        "kind": "STRAIGHT",
+        "is_connector": false,
+        "corridor_width": 140
+      }
+    }
+  ]
+}
