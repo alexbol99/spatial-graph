@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SpatialGraph } from '../SpatialGraph.next.js';
+import { SpatialGraph } from '../SpatialGraph.js';
 
 describe('redesign foundation', () => {
   it('canonicalizes coordinates once for membership, geometry, and keys', () => {
@@ -73,8 +73,8 @@ describe('redesign foundation', () => {
     expect(graph.addEdge([[1, 0], [0, 0]], {}).status).toBe('existing');
     expect(() => graph.addEdge([[1, 0], [Number.NaN, 0]], {})).toThrow(/finite/);
     expect(graph.edgeCount).toBe(1);
-    expect(() => graph.addEdge([[1, 0], [2, 0]], {})).toThrow(/Add them with addNode/);
-    expect(graph.nodeCount).toBe(2);
+    expect(graph.addEdge([[1, 0], [2, 0]], {}).status).toBe('added');
+    expect(graph.nodeCount).toBe(3);
   });
 
   it('exports a detached Graphology graph with derived geometry and copied metadata', () => {
@@ -91,7 +91,7 @@ describe('redesign foundation', () => {
 
   it('rejects invalid precision, angle, and non-finite coordinates', () => {
     expect(() => new SpatialGraph({ coordinatePrecision: 16 })).toThrow(/coordinatePrecision/);
-    expect(() => new SpatialGraph({ straightAngleToleranceDeg: 90 })).toThrow(/straightAngleToleranceDeg/);
+    expect(() => new SpatialGraph({ straightAngleToleranceDeg: 90 })).toThrow(/Angle tolerance/);
     const graph = new SpatialGraph();
     expect(() => graph.addNode([Infinity, 0], {})).toThrow(/finite/);
     expect(() => graph.getNodeKey([1e308, 0])).not.toThrow();

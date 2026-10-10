@@ -1,9 +1,10 @@
 import { Point } from '@flatten-js/core';
-import type { NodeData, NodeType, Point2D } from './types.js';
+import type { NodeAttributes, NodeType, Point2D } from './types.js';
+import { distance, freezePoint } from './utils/geometry.js';
 import { snapshotToken } from './internal/snapshotToken.js';
 
 /** An immutable view of a node at one graph revision. */
-export class SpatialNode<N extends object = NodeData> {
+export class SpatialNode<N extends object = NodeAttributes> {
   readonly key: string;
   readonly point: Point2D;
   readonly degree: number;
@@ -14,7 +15,7 @@ export class SpatialNode<N extends object = NodeData> {
   constructor(token: symbol, key: string, point: Point2D, degree: number, type: NodeType, attributes: N) {
     if (token !== snapshotToken) throw new TypeError('Use graph.getNode to obtain a SpatialNode.');
     this.key = key;
-    this.point = Object.freeze([point[0], point[1]] as const);
+    this.point = freezePoint(point);
     this.degree = degree;
     this.type = type;
     this.attributes = Object.freeze({ ...attributes }) as Readonly<N>;
@@ -28,7 +29,7 @@ export class SpatialNode<N extends object = NodeData> {
 
   /** Euclidean distance, including for snapshots retained after removal. */
   distanceTo(other: SpatialNode<N>): number {
-    return Math.hypot(this.point[0] - other.point[0], this.point[1] - other.point[1]);
+    return distance(this.point, other.point);
   }
 
   /** Create an independent Flatten point. */

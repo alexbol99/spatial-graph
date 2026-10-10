@@ -9,7 +9,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": { "@flatten-js/spatial-graph": ["./src/index.ts"] }
   },
   "include": ["src"]
 }

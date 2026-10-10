@@ -423,3 +423,21 @@ How later phases use it:
   structured-path and head-index BFS rewrites.
 - **Phase 4:** re-run `scan-usage.cjs` against the migrated consumer and confirm
   no used member lacks a destination.
+
+## 11. Redesign fixture migration (2026-10-10)
+
+The fixture adapter now uses the 2.0 composition API, explicit integer precision,
+and `ConsumerNode`/`ConsumerEdge` generics so width remains a number. The original
+36 baseline tests recorded historical behavior. They have been replaced with
+eight consumer-flow acceptance tests plus broader library invariant tests;
+known quirks are not retained as 2.0 requirements. Off-edge split now rejects,
+straight joining is safe by default, bend/triangle collapse is explicit, and
+editor ID changes use a split callback. Exact projections remain fractional;
+an editor choosing grid displacement supplies an explicit position tolerance.
+
+The stored/producer fixtures are unchanged. Load/save, labels/counters, width,
+identity preservation, simultaneous edits, snapping and split/connect are covered.
+The real consuming project is not checked out in this workspace; this confirms
+the representative adapter contract, not migration of its 44 importing files
+or execution of its build/tests. Section 9.4's external-data decisions remain
+consumer release checks.

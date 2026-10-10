@@ -4,6 +4,7 @@ import { SpatialNode } from '../SpatialNode.js';
 import { SpatialEdge } from '../SpatialEdge.js';
 import { classifyNode } from '../algorithms/classification.js';
 import { snapshotToken } from './snapshotToken.js';
+import { copyData } from '../utils/geometry.js';
 
 export interface StoredNode<N extends object> {
   x: number;
@@ -27,13 +28,14 @@ export function nodeSnapshot<N extends object, E extends object>(
   key: string,
   straightAngleToleranceDeg: number,
   cache?: Map<string, SpatialNode<N>>,
+  cloneNode: (data: N) => N = copyData,
 ): SpatialNode<N> {
   const cached = cache?.get(key);
   if (cached) return cached;
   const record = graph.getNodeAttributes(key);
   const snapshot = new SpatialNode(
     snapshotToken, key, [record.x, record.y], graph.degree(key),
-    classifyNode(graph, key, straightAngleToleranceDeg), record.data,
+    classifyNode(graph, key, straightAngleToleranceDeg), cloneNode(record.data),
   );
   cache?.set(key, snapshot);
   return snapshot;
@@ -45,12 +47,14 @@ export function edgeSnapshot<N extends object, E extends object>(
   key: string,
   straightAngleToleranceDeg: number,
   cache?: Map<string, SpatialNode<N>>,
+  cloneNode: (data: N) => N = copyData,
+  cloneEdge: (data: E) => E = copyData,
 ): SpatialEdge<N, E> {
   const [source, target] = graph.extremities(key);
   return new SpatialEdge(
     snapshotToken, key,
-    nodeSnapshot(graph, source, straightAngleToleranceDeg, cache),
-    nodeSnapshot(graph, target, straightAngleToleranceDeg, cache),
-    graph.getEdgeAttributes(key).data,
+    nodeSnapshot(graph, source, straightAngleToleranceDeg, cache, cloneNode),
+    nodeSnapshot(graph, target, straightAngleToleranceDeg, cache, cloneNode),
+    cloneEdge(graph.getEdgeAttributes(key).data),
   );
 }

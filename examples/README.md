@@ -5,12 +5,12 @@ package; the same recipes are in the package README and `llms.txt`.
 
 | File | Shows |
 | --- | --- |
-| [`routing.ts`](routing.ts) | Shortest path by length, path length, closest node |
+| [`routing.ts`](routing.ts) | A* snapshots, path length, nonmutating projected route |
 | [`snap-and-connect.ts`](snap-and-connect.ts) | Snap a point onto the nearest edge and connect it |
 | [`planarize.ts`](planarize.ts) | Split crossing segments at every intersection |
 | [`cleanup.ts`](cleanup.ts) | Remove islands, short dead ends and pass-through nodes |
 | [`proximity-graph.ts`](proximity-graph.ts) | Connect points by your own rule |
-| [`save-and-load.ts`](save-and-load.ts) | JSON round trip with graphology export and import |
+| [`save-and-load.ts`](save-and-load.ts) | Spatial JSON round trip and detached Graphology adapters |
 
 Each file asserts its own result, so a failing example fails the build.
 

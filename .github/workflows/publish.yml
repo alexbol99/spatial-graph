@@ -38,6 +38,10 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm check:package
+      - run: pnpm check:examples
+      - run: pnpm check:consumers
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm check:browser
 
       # OIDC auth, no NPM_TOKEN; provenance is generated automatically.
       # Scripts are skipped because the steps above already ran prepublishOnly's checks.

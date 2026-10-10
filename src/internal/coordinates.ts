@@ -8,6 +8,7 @@ export function validatePrecision(precision: CoordinatePrecision): void {
 
 /** Normalize a graph coordinate, rejecting values that cannot be represented. */
 export function canonicalPoint(point: Point2D, precision: CoordinatePrecision): Point2D {
+  if (!Array.isArray(point) || point.length !== 2) throw new TypeError('Point must be a two-number [x, y] tuple.');
   const [x, y] = point;
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     throw new RangeError('Point coordinates must be finite numbers; pass a finite [x, y] tuple.');
@@ -17,7 +18,7 @@ export function canonicalPoint(point: Point2D, precision: CoordinatePrecision): 
   const factor = 10 ** precision;
   const scaledX = x * factor;
   const scaledY = y * factor;
-  if (!Number.isFinite(scaledX) || !Number.isFinite(scaledY)) {
+  if (!Number.isFinite(scaledX) || !Number.isFinite(scaledY) || Math.abs(scaledX) > Number.MAX_SAFE_INTEGER || Math.abs(scaledY) > Number.MAX_SAFE_INTEGER) {
     throw new RangeError('Point cannot be quantized at coordinatePrecision; use smaller coordinates or a lower precision.');
   }
   const nx = Math.round(scaledX) / factor;
@@ -28,4 +29,12 @@ export function canonicalPoint(point: Point2D, precision: CoordinatePrecision): 
 /** Build a key only from canonical coordinates. */
 export function pointKey(point: Point2D): string {
   return `${point[0]},${point[1]}`;
+}
+
+/** Strict legacy/reference parsing; routine geometry reads the stored coordinates. */
+export function parseKey(key: string): Point2D {
+  const number = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?';
+  if (typeof key !== 'string' || !new RegExp(`^${number},${number}$`).test(key)) throw new Error('Malformed node key; use getNodeKey([x, y]) to construct a coordinate key.');
+  const [x, y] = key.split(',').map(Number) as [number, number];
+  return canonicalPoint([x, y], null);
 }

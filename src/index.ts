@@ -1,10 +1,10 @@
 export { SpatialGraph } from './SpatialGraph.js';
+export { SpatialNode } from './SpatialNode.js';
+export { SpatialEdge } from './SpatialEdge.js';
 export type {
-  EdgeAttributes,
-  FilterPredicate,
-  IsValidCallback,
-  NodeAttributes,
-  NxEdge,
-  NxPoint,
-  SpatialGraphOptions,
+  Point2D, Vector2D, Segment2D, CoordinatePrecision, NodeType, NodeAttributes, EdgeAttributes,
+  NodeInput, EdgeInput, SpatialGraphOptions, GraphologyImportOptions, EdgeRecord,
+  EdgeInsertResult, BatchInsertResult, ConflictOptions, MutationReport, SplitOptions, SplitResult,
+  JoinOptions, JoinResult, NearestEdgeResult, SpatialPath, PathOptions, RouteResult,
+  SpatialGraphJSON, PlanarizeResult, NearbyMergeResult, GeoJSONFeature, GeoJSONCollection,
 } from './types.js';

@@ -50,3 +50,12 @@ jobs:
 
       - name: Run examples against the build
         run: pnpm check:examples
+
+      - name: Check ESM and CJS consumers
+        run: pnpm check:consumers
+
+      - name: Install browser for smoke test
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run browser smoke test
+        run: pnpm check:browser

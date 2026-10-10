@@ -1,10 +1,11 @@
 import { Segment } from '@flatten-js/core';
-import type { EdgeData, NodeData, Point2D, Segment2D } from './types.js';
+import type { EdgeAttributes, NodeAttributes, Point2D, Segment2D } from './types.js';
+import { distance, freezePoint, midpoint } from './utils/geometry.js';
 import { SpatialNode } from './SpatialNode.js';
 import { snapshotToken } from './internal/snapshotToken.js';
 
 /** An immutable view of an undirected edge at one graph revision. */
-export class SpatialEdge<N extends object = NodeData, E extends object = EdgeData> {
+export class SpatialEdge<N extends object = NodeAttributes, E extends object = EdgeAttributes> {
   readonly key: string;
   readonly source: SpatialNode<N>;
   readonly target: SpatialNode<N>;
@@ -24,18 +25,12 @@ export class SpatialEdge<N extends object = NodeData, E extends object = EdgeDat
 
   /** Arithmetic midpoint of the canonical endpoints; it need not be a node. */
   get midpoint(): Point2D {
-    return Object.freeze([
-      this.source.point[0] / 2 + this.target.point[0] / 2,
-      this.source.point[1] / 2 + this.target.point[1] / 2,
-    ] as const);
+    return freezePoint(midpoint(this.endpoints));
   }
 
   /** Euclidean length of the canonical segment. */
   get length(): number {
-    return Math.hypot(
-      this.target.point[0] - this.source.point[0],
-      this.target.point[1] - this.source.point[1],
-    );
+    return distance(...this.endpoints);
   }
 
   /** Compare endpoint positions regardless of orientation or Graphology edge key. */

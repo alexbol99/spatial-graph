@@ -1,32 +1,15 @@
-import { describe, it, expect } from 'vitest';
-import { Point, Segment } from '@flatten-js/core';
-import { projectPointOnSegment } from '../utils/projection.js';
+import { expect, it } from 'vitest';
+import { projectPoint } from '../utils/projection.js';
+it('projects interior points and clamps only points outside the segment', () => {
+  const segment = [[0, 0], [10, 0]] as const;
+  expect(projectPoint([4, 3], segment)).toEqual({ point: [4, 0], distance: 3, t: 0.4, clamped: false });
+  expect(projectPoint([-1, 0], segment)).toEqual({ point: [0, 0], distance: 1, t: 0, clamped: true });
+  expect(projectPoint([11, 0], segment)).toEqual({ point: [10, 0], distance: 1, t: 1, clamped: true });
+  expect(projectPoint([0, 2], segment).clamped).toBe(false);
+  expect(projectPoint([2, 2], [[1, 1], [1, 1]])).toMatchObject({ point: [1, 1], t: 0, clamped: false });
+});
 
-describe('projection utilities', () => {
-  describe('projectPointOnSegment', () => {
-    const segment = new Segment(new Point(0, 0), new Point(10, 0));
-
-    it('should project points onto the segment interior', () => {
-      expect(projectPointOnSegment([4, 3], segment)).toEqual([4, 0]);
-    });
-
-    it('should clamp projections before the segment start', () => {
-      expect(projectPointOnSegment([-3, 2], segment)).toEqual([0, 0]);
-    });
-
-    it('should clamp projections after the segment end', () => {
-      expect(projectPointOnSegment([14, -2], segment)).toEqual([10, 0]);
-    });
-
-    it('should preserve endpoint projections', () => {
-      expect(projectPointOnSegment([0, 5], segment)).toEqual([0, 0]);
-      expect(projectPointOnSegment([10, -5], segment)).toEqual([10, 0]);
-    });
-
-    it('should return the endpoint of a zero-length segment', () => {
-      const point = new Segment(new Point(3, 4), new Point(3, 4));
-
-      expect(projectPointOnSegment([7, 1], point)).toEqual([3, 4]);
-    });
-  });
+it('clamps representable endpoint projections without overflowing the parameter', () => {
+  const result = projectPoint([1, 0], [[0, 0], [Number.MIN_VALUE, 0]]);
+  expect(result.point).toEqual([Number.MIN_VALUE, 0]); expect(result.t).toBe(1); expect(result.clamped).toBe(true); expect(result.distance).toBe(1);
 });
