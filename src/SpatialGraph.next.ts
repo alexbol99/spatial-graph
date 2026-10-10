@@ -1,19 +1,11 @@
-import graphology from 'graphology';
-import type { AbstractGraph, GraphConstructor } from 'graphology-types';
-import { canonicalPoint, pointKey, validatePrecision } from './coordinates.js';
-import type { CoordinatePrecision, Point2D, Segment2D } from './coordinates.js';
-import { makeEdge, makeNode, SpatialEdge, SpatialNode } from './elements.js';
-import type { EdgeAttributes, NodeAttributes, NodeType } from './elements.js';
-
-interface StoredNode<N extends object> {
-  x: number;
-  y: number;
-  data: N;
-}
-
-interface StoredEdge<E extends object> {
-  data: E;
-}
+import type { AbstractGraph } from 'graphology-types';
+import { canonicalPoint, pointKey, validatePrecision } from './internal/coordinates.js';
+import { createStorage, edgeSnapshot, nodeSnapshot } from './internal/storage.js';
+import type { StoredEdge, StoredNode } from './internal/storage.js';
+import { toGraphology as createDetachedGraphology } from './adapters/graphology.js';
+import { SpatialNode } from './SpatialNode.js';
+import { SpatialEdge } from './SpatialEdge.js';
+import type { CoordinatePrecision, EdgeData, NodeData, NodeType, Point2D, Segment2D } from './types.js';
 
 export interface SpatialGraphOptions<N extends object> {
   coordinatePrecision?: CoordinatePrecision;
@@ -30,7 +22,7 @@ export type EdgeInsertResult<N extends object, E extends object> =
   | { readonly status: 'collapsed'; readonly edge: null; readonly endpoints: Segment2D };
 
 /** A 2D simple undirected graph with private Graphology storage. */
-export class SpatialGraph<N extends object = NodeAttributes, E extends object = EdgeAttributes> {
+export class SpatialGraph<N extends object = NodeData, E extends object = EdgeData> {
   private readonly graph: AbstractGraph<StoredNode<N>, StoredEdge<E>>;
   readonly coordinatePrecision: CoordinatePrecision;
   readonly straightAngleToleranceDeg: number;
@@ -46,8 +38,7 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
       throw new RangeError('straightAngleToleranceDeg must be finite and in [0, 90).');
     }
     this.createNodeAttributes = options.createNodeAttributes;
-    const Graph = graphology as unknown as GraphConstructor<StoredNode<N>, StoredEdge<E>>;
-    this.graph = new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
+    this.graph = createStorage<N, E>();
   }
 
   /** Number of current nodes. */
@@ -69,47 +60,12 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
     return edge instanceof SpatialEdge ? edge.endpoints : edge;
   }
 
-  private nodeType(key: string): NodeType {
-    const degree = this.graph.degree(key);
-    if (degree === 0) return 'isolated';
-    if (degree === 1) return 'stub';
-    if (degree > 2) return 'junction';
-    const center = this.graph.getNodeAttributes(key);
-    const [aKey, bKey] = this.graph.neighbors(key);
-    if (aKey === undefined || bKey === undefined) {
-      throw new Error('Graph storage is inconsistent: a degree-2 node has fewer than two neighbors.');
-    }
-    const a = this.graph.getNodeAttributes(aKey);
-    const b = this.graph.getNodeAttributes(bKey);
-    const ax = a.x - center.x;
-    const ay = a.y - center.y;
-    const bx = b.x - center.x;
-    const by = b.y - center.y;
-    const aLength = Math.hypot(ax, ay);
-    const bLength = Math.hypot(bx, by);
-    const ux = ax / aLength;
-    const uy = ay / aLength;
-    const vx = bx / bLength;
-    const vy = by / bLength;
-    const angle = Math.atan2(Math.abs(ux * vy - uy * vx), ux * vx + uy * vy);
-    const deviationDeg = (Math.PI - angle) * 180 / Math.PI;
-    return deviationDeg <= this.straightAngleToleranceDeg ? 'intermediate' : 'corner';
-  }
-
   private nodeSnapshot(key: string, cache?: Map<string, SpatialNode<N>>): SpatialNode<N> {
-    const cached = cache?.get(key);
-    if (cached) return cached;
-    const record = this.graph.getNodeAttributes(key);
-    const snapshot = makeNode(key, [record.x, record.y], this.graph.degree(key), this.nodeType(key), record.data);
-    cache?.set(key, snapshot);
-    return snapshot;
+    return nodeSnapshot(this.graph, key, this.straightAngleToleranceDeg, cache);
   }
 
   private edgeSnapshot(key: string, cache?: Map<string, SpatialNode<N>>): SpatialEdge<N, E> {
-    const [source, target] = this.graph.extremities(key);
-    return makeEdge(
-      key, this.nodeSnapshot(source, cache), this.nodeSnapshot(target, cache), this.graph.getEdgeAttributes(key).data,
-    );
+    return edgeSnapshot(this.graph, key, this.straightAngleToleranceDeg, cache);
   }
 
   /** Add or update a node at its canonical point; returns a fresh snapshot. */
@@ -260,23 +216,6 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
 
   /** Return an independent Graphology graph for interoperability. */
   toGraphology(): AbstractGraph<{ x: number; y: number; data: N }, { length: number; data: E }> {
-    const Graph = graphology as unknown as GraphConstructor<
-      { x: number; y: number; data: N }, { length: number; data: E }
-    >;
-    const detached = new Graph({ type: 'undirected', multi: false, allowSelfLoops: false });
-    for (const key of this.graph.nodes()) {
-      const record = this.graph.getNodeAttributes(key);
-      detached.addNode(key, { x: record.x, y: record.y, data: { ...record.data } });
-    }
-    for (const key of this.graph.edges()) {
-      const [source, target] = this.graph.extremities(key);
-      const a = this.graph.getNodeAttributes(source);
-      const b = this.graph.getNodeAttributes(target);
-      const length = Math.hypot(b.x - a.x, b.y - a.y);
-      detached.addUndirectedEdgeWithKey(key, source, target, {
-        length, data: { ...this.graph.getEdgeAttributes(key).data },
-      });
-    }
-    return detached;
+    return createDetachedGraphology(this.graph);
   }
 }

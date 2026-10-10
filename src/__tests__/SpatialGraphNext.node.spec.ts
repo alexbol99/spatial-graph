@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SpatialGraph } from './SpatialGraph.js';
+import { SpatialGraph } from '../SpatialGraph.next.js';
 
 describe('redesign foundation', () => {
   it('canonicalizes coordinates once for membership, geometry, and keys', () => {

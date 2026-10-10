@@ -1,11 +1,4 @@
-/** A planar coordinate value; graph membership is determined separately. */
-export type Point2D = readonly [x: number, y: number];
-
-/** A segment's endpoint coordinates. */
-export type Segment2D = readonly [start: Point2D, end: Point2D];
-
-/** `null` preserves finite coordinates; an integer quantizes decimal places. */
-export type CoordinatePrecision = number | null;
+import type { CoordinatePrecision, Point2D } from '../types.js';
 
 export function validatePrecision(precision: CoordinatePrecision): void {
   if (precision !== null && (!Number.isInteger(precision) || precision < 0 || precision > 15)) {
