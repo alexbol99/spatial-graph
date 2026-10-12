@@ -11,6 +11,7 @@ export type {
   NodeAttributes,
   EdgeAttributes,
   NodeInput,
+  NearestNodeOptions,
   TraversalCallback,
   EdgeInput,
   SpatialGraphOptions,

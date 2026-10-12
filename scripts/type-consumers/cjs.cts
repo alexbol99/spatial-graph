@@ -1,6 +1,16 @@
 import graphPackage = require('@flatten-js/spatial-graph');
 const graph = new graphPackage.SpatialGraph<{ tag?: string }, { width: number }>();
 const node: graphPackage.SpatialNode<{ tag?: string }> = graph.addNode([0, 0], { tag: 'x' });
+const nearestOptions: graphPackage.NearestNodeOptions<{ tag?: string }> = {
+  excludeNodes: [node, [0, 0]] as const,
+};
+const eligible: graphPackage.SpatialNode<{ tag?: string }> | null = graph.findNearestNode(
+  [1, 0],
+  nearestOptions,
+);
+void eligible;
+// @ts-expect-error Raw keys are not node inputs.
+graph.findNearestNode([1, 0], { excludeNodes: ['0,0'] });
 const result = graph.addEdge(
   [
     [0, 0],

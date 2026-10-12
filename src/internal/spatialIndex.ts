@@ -1,4 +1,5 @@
 import RBush from 'rbush';
+import knn from 'rbush-knn';
 import type { BBox } from 'rbush';
 import type { Point2D, Segment2D } from '../types.js';
 import { MinHeap } from './heap.js';
@@ -66,6 +67,47 @@ export class SpatialIndex {
       .map((item) => item.key);
   }
 
+  /** Point entries only: indexed exclusions, exact distances, and stable insertion-order ties. */
+  nearestPoint(
+    point: Point2D,
+    evaluate: (key: string) => number,
+    excluded: ReadonlySet<string>,
+  ): string | null {
+    let winner = knn(this.tree, point[0], point[1], 1, (item) => !excluded.has(item.key))[0];
+    if (!winner) {
+      return null;
+    }
+    let best = evaluate(winner.key);
+
+    // rbush-knn ranks squared box distances and does not promise tie ordering.
+    // Its candidate gives an upper bound: refine only that indexed neighborhood
+    // with exact distances. This also handles squared-distance overflow/underflow.
+    // Expand outward for floating-point rounding when forming the search bounds.
+    const padding = Math.max(
+      Number.MIN_VALUE,
+      Math.max(Math.abs(point[0]), Math.abs(point[1]), best) * Number.EPSILON * 4,
+    );
+    const radius = best + padding;
+    const candidates = this.tree.search({
+      minX: point[0] - radius,
+      minY: point[1] - radius,
+      maxX: point[0] + radius,
+      maxY: point[1] + radius,
+    });
+    for (const candidate of candidates) {
+      if (excluded.has(candidate.key)) {
+        continue;
+      }
+      const d = evaluate(candidate.key);
+      if (d < best || (d === best && candidate.order < winner.order)) {
+        best = d;
+        winner = candidate;
+      }
+    }
+    return winner.key;
+  }
+
+  /** Segment entries: retain exact geometry evaluation, not bounding-box KNN ranking. */
   nearest(point: Point2D, evaluate: (key: string) => number): string | null {
     const heap = new MinHeap<Branch | IndexItem>();
     const root = this.tree.toJSON() as Branch;

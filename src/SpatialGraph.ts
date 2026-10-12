@@ -56,6 +56,7 @@ import type {
   LabelInput,
   MutationReport,
   NearestEdgeResult,
+  NearestNodeOptions,
   NearbyMergeResult,
   NodeAttributes,
   NodeInput,
@@ -914,23 +915,26 @@ export class SpatialGraph<N extends object = NodeAttributes, E extends object = 
   }
 
   /**
-   * Indexed exact nearest node; null for an empty graph. Pass scan to compare the reference
-   * algorithm.
-   * @throws For invalid coordinates/options.
+   * Indexed exact nearest eligible node; null when none remain. Exclusions accept coordinates
+   * or snapshots and resolve against this graph's precision; absent nodes are ignored.
+   * Equal-distance ties follow insertion order. Pass scan to compare the reference algorithm.
+   * @throws For invalid query coordinates or exclusion inputs.
    */
-  findNearestNode(
-    point: Point2D,
-    options: {
-      scan?: boolean;
-    } = {},
-  ): SpatialNode<N> | null {
+  findNearestNode(point: Point2D, options: NearestNodeOptions<N> = {}): SpatialNode<N> | null {
     canonicalPoint(point, null);
+    if (options.excludeNodes !== undefined && !Array.isArray(options.excludeNodes)) {
+      throw new TypeError('excludeNodes must be an array of coordinates or node snapshots.');
+    }
+    const excluded = new Set(options.excludeNodes?.map((node) => this.keyOf(node)));
 
     const evaluate = (key: string) => distance(point, pointOf(this.#graph.getNodeAttributes(key)));
 
     const key = options.scan
-      ? nearestKey(this.#graph.nodes(), evaluate)
-      : this.#nodeIndex.nearest(point, evaluate);
+      ? nearestKey(
+          this.#graph.nodes().filter((key) => !excluded.has(key)),
+          evaluate,
+        )
+      : this.#nodeIndex.nearestPoint(point, evaluate, excluded);
     return key === null ? null : this.nodeSnapshot(key);
   }
 

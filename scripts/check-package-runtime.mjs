@@ -18,6 +18,8 @@ for (const [format, { SpatialGraph, SpatialNode, SpatialEdge, PathAlgorithm }] o
   graph.dfsFromNode(graph.getNode([0, 0]), () => { counts[3]++; });
   assert.deepEqual(counts, [3, 3, 3, 3]);
   assert.deepEqual(graph.findNearestNode([5, 1]).point, [5, 1]);
+  assert.deepEqual(graph.findNearestNode([5, 1], { excludeNodes: [[5, 1]] }).point, [0, 0]);
+  assert.equal(graph.findNearestNode([5, 1], { excludeNodes: graph.getNodes() }), null);
   assert.equal(graph.findNearestEdge([5, 1]).distance, 0);
   assert.equal(graph.getShortestPath([0, 0], [10, 0], { algorithm: PathAlgorithm.AStar }).edges.length, 2);
   assert.deepEqual(SpatialGraph.fromJSON(graph.export()).getEdgeSegments(), graph.getEdgeSegments());

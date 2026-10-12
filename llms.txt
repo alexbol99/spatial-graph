@@ -293,6 +293,28 @@ return null. Geometry edits update indexes; metadata edits leave them unchanged.
 On a quantized graph, an exact projection may round OFF its edge. splitEdge then
 throws before mutation; use representable on-edge points or an exact policy.
 
+### Nearest node with exclusions (2.0.1)
+
+<!-- example: nearest-node.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+const graph = new SpatialGraph();
+const moving = graph.addNode([0, 0]);
+graph.addNode([20, 0]);
+const target = [5, 0] as const;
+const nearest = graph.findNearestNode(target, { excludeNodes: [moving] });
+```
+
+nearest is the node at [20,0]. excludeNodes accepts readonly coordinate tuples
+or snapshots in an array; absent entries are ignored. Empty/all-excluded graphs
+return null. Exclusions use graph precision; snapshots exclude retained coordinates,
+not a moving metadata identity. Queries stay exact. Invalid coordinates/exclusions
+throw without mutation. rbush-knn filters indexed candidates; bounded exact-distance
+refinement preserves insertion-order ties and extreme-coordinate correctness.
+{scan:true} is the exclusion-aware reference. Exact edge search is unchanged.
+
 ## Connectivity and cleanup
 
 <!-- example: planarize.ts -->

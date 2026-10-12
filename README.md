@@ -264,6 +264,33 @@ graph, a projection may round off its segment and `splitEdge` will throw before
 mutation. See [precision.ts](examples/precision.ts). Index entries update with
 every geometry mutation; metadata edits leave them unchanged.
 
+**Nearest node with exclusions (2.0.1)**
+
+<!-- example: nearest-node.ts -->
+
+```ts
+import { SpatialGraph } from '@flatten-js/spatial-graph';
+
+const graph = new SpatialGraph();
+const moving = graph.addNode([0, 0]);
+graph.addNode([20, 0]);
+const target = [5, 0] as const;
+const nearest = graph.findNearestNode(target, { excludeNodes: [moving] });
+```
+
+Here `nearest` is the node at `[20, 0]`, even though the excluded node is closer.
+`excludeNodes` accepts a readonly array of coordinate tuples or node snapshots;
+absent entries are ignored, and an empty or fully excluded graph returns `null`.
+Exclusions use the graph's canonical precision; a retained snapshot excludes its
+old coordinates, not a stable metadata identity after movement. Query coordinates
+remain exact and invalid coordinates/exclusions throw without changing the graph.
+
+Node lookup uses `rbush-knn` with an exclusion filter and bounded exact-distance
+refinement to preserve insertion-order ties and extreme-coordinate correctness.
+`{ scan: true }` applies the same exclusions using the reference scan. Exact edge
+queries retain their segment-distance search; nearest bounding boxes are not a
+substitute for nearest segments. See [nearest-node.ts](examples/nearest-node.ts).
+
 **Planarize crossings**
 
 <!-- example: planarize.ts -->

@@ -29,6 +29,10 @@ try {
     'Connected-component snapshots',
   );
   assert(graph.findNearestNode([5, 1])?.key === '5,1', 'Indexed nearest node');
+  assert(
+    graph.findNearestNode([5, 1], { excludeNodes: [[5, 1]] })?.key === '0,0',
+    'Indexed nearest node with exclusion',
+  );
   const counts = [0, 0, 0, 0];
   graph.bfs(() => {
     counts[0]!++;

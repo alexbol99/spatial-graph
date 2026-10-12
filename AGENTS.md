@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository. For agents *using* the
 package in another project, see [llms.txt](llms.txt).
 `CLAUDE.md` imports this file; keep contributor instructions here rather than
 maintaining a second copy. The current checkout implements the breaking 2.0 API,
-with package version `2.0.0`. Check npm/release status when discussing publication.
+with package version `2.0.1`. Check npm/release status when discussing publication.
 
 ## What this is
 
