@@ -1,5 +1,10 @@
 import { PathAlgorithm, SpatialGraph, SpatialNode, SpatialEdge } from '@flatten-js/spatial-graph';
-import type { Point2D, SpatialGraphJSON, TraversalCallback } from '@flatten-js/spatial-graph';
+import type {
+  NearestNodeOptions,
+  Point2D,
+  SpatialGraphJSON,
+  TraversalCallback,
+} from '@flatten-js/spatial-graph';
 interface NodeData {
   label: string;
 }
@@ -8,6 +13,13 @@ interface EdgeData {
 }
 const graph = new SpatialGraph<NodeData, EdgeData>({ createNodeAttributes: () => ({ label: '' }) });
 const node: SpatialNode<NodeData> = graph.addNode([0, 0], { label: 'a' });
+const nearestOptions: NearestNodeOptions<NodeData> = {
+  excludeNodes: [node, [0, 0]] as const,
+};
+const eligible: SpatialNode<NodeData> | null = graph.findNearestNode([1, 0], nearestOptions);
+void eligible;
+// @ts-expect-error Exclusions accept coordinates/snapshots, not raw keys.
+graph.findNearestNode([1, 0], { excludeNodes: ['0,0'] });
 const result = graph.addEdge(
   [
     [0, 0],

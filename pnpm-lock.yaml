@@ -26,6 +26,9 @@ importers:
       rbush:
         specifier: ^4.0.1
         version: 4.0.1
+      rbush-knn:
+        specifier: ^4.0.0
+        version: 4.0.0
     devDependencies:
       '@arethetypeswrong/cli':
         specifier: ^0.18.5
@@ -955,6 +958,9 @@ packages:
   quickselect@3.0.0:
     resolution: {integrity: sha512-XdjUArbK4Bm5fLLvlm5KpTFOiOThgfWWI4axAZDWg4E/0mKdZyI9tNEfds27qCi1ze/vwTR16kvmmGhRra3c2g==}
 
+  rbush-knn@4.0.0:
+    resolution: {integrity: sha512-1FN0H0zc75607hVSx2NbiiS/TTaSMOg6y7HfOwEmBEc1LEkaIK91n6bPltnJov1XgE2Caeex7EWZip2aiGmA0Q==}
+
   rbush@4.0.1:
     resolution: {integrity: sha512-IP0UpfeWQujYC8Jg162rMNc01Rf0gWMMAb2Uxus/Q0qOFw4lCcq6ZnQEZwUoJqWyUGJ9th7JjwI4yIWo+uvoAQ==}
 
@@ -1051,6 +1057,9 @@ packages:
   tinyglobby@0.2.17:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
+
+  tinyqueue@2.0.3:
+    resolution: {integrity: sha512-ppJZNDuKGgxzkHihX8v9v9G5f+18gzaTfrukGrq6ueg0lmH4nqVnA2IPG0AEH3jKEk2GRJCUhDoqpoiw3PHLBA==}
 
   tinyrainbow@3.1.1:
     resolution: {integrity: sha512-yau8yJdTt989Mm0Bd/236QnzEiPf2xLLTqUZRUJOo/3CB078LSwzei343DgtJVmfJKJE3TMINY1u42SQsP6mXw==}
@@ -1875,6 +1884,10 @@ snapshots:
 
   quickselect@3.0.0: {}
 
+  rbush-knn@4.0.0:
+    dependencies:
+      tinyqueue: 2.0.3
+
   rbush@4.0.1:
     dependencies:
       quickselect: 3.0.0
@@ -1971,6 +1984,8 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
+
+  tinyqueue@2.0.3: {}
 
   tinyrainbow@3.1.1: {}
 

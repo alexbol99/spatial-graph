@@ -18,6 +18,7 @@ Read the first three before editing a graph; choose the rest by the task at hand
 | [routing.ts](routing.ts) | A* length routing, longer but cheaper custom-cost paths, closed edges, missing endpoints, nonmutating virtual routes and excluded access legs |
 | [traversal.ts](traversal.ts) | Graphology BFS/DFS wrappers, snapshot callbacks and depth, all components versus one start, branch pruning and mutation guards |
 | [snap-and-connect.ts](snap-and-connect.ts) | Project, split, then connect a spur; missing/endpoint projections and replacement of the old edge |
+| [nearest-node.ts](nearest-node.ts) | Indexed node exclusion with coordinates/snapshots, reference-scan parity, empty results and canonical precision |
 | [planarize.ts](planarize.ts) | Crossing geometry versus adjacency, all cuts in one edit, idempotence, edge-once path decomposition |
 | [cleanup.ts](cleanup.ts) | Explicit component/stub policy, removal counts, safe joins that preserve bends, a closed cycle |
 | [proximity-graph.ts](proximity-graph.ts) | Pairwise caller-defined connections, isolated nodes, transitive nearby-node clusters whose displacement exceeds tolerance |

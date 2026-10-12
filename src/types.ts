@@ -17,6 +17,13 @@ export interface EdgeAttributes {
   [name: string]: unknown;
 }
 export type NodeInput<N extends object = NodeAttributes> = Point2D | SpatialNode<N>;
+/** Indexed nearest-node query; exclusions resolve by canonical coordinates, not metadata identity. */
+export interface NearestNodeOptions<N extends object = NodeAttributes> {
+  /** Coordinates or retained snapshots to exclude; absent nodes are ignored. */
+  excludeNodes?: readonly NodeInput<N>[];
+  /** Use the exact reference scan instead of the spatial index. */
+  scan?: boolean;
+}
 /** Synchronous traversal visitor; true skips expansion of this node, not the whole traversal. */
 export type TraversalCallback<N extends object = NodeAttributes> = (
   node: SpatialNode<N>,

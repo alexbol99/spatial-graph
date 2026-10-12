@@ -6,6 +6,11 @@ const quickselectLicense = readFileSync(
   new URL('./licenses/quickselect.txt', import.meta.url),
   'utf8',
 );
+const knnLicense = readFileSync(
+  new URL('./node_modules/rbush-knn/LICENSE', import.meta.url),
+  'utf8',
+);
+const tinyqueueLicense = readFileSync(new URL('./licenses/tinyqueue.txt', import.meta.url), 'utf8');
 
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -15,7 +20,10 @@ export default defineConfig({
   dts: true,
   sourcemap: true,
   clean: true,
-  // RBush 4 is ESM-only; bundle it so the synchronous CJS entry remains usable.
-  deps: { alwaysBundle: ['rbush', 'quickselect'], onlyBundle: ['rbush', 'quickselect'] },
-  banner: `/*! Bundled RBush:\n${rbushLicense}\nBundled quickselect:\n${quickselectLicense}*/`,
+  // Bundle spatial-index dependencies so the synchronous CJS entry remains usable.
+  deps: {
+    alwaysBundle: ['rbush', 'quickselect', 'rbush-knn', 'tinyqueue'],
+    onlyBundle: ['rbush', 'quickselect', 'rbush-knn', 'tinyqueue'],
+  },
+  banner: `/*! Bundled RBush:\n${rbushLicense}\nBundled quickselect:\n${quickselectLicense}\nBundled rbush-knn:\n${knnLicense}\nBundled tinyqueue:\n${tinyqueueLicense}*/`,
 });
